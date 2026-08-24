@@ -32,9 +32,11 @@ jobs:
         run: npm ci
 
       - name: Build installers
-        run: npm run dist
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist -- --publish never
+
+      - name: List release files
+        shell: bash
+        run: find release -maxdepth 3 -type f -print
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -61,9 +63,19 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        shell: bash
+        run: find artifacts -maxdepth 4 -type f -print
 
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.exe
+            artifacts/**/*.zip
+            artifacts/**/*.blockmap
+            artifacts/**/latest*.yml
           body_path: RELEASE_NOTES.md
