@@ -16,6 +16,67 @@ Book2Paper 可以把本地小说转换成论文风格的阅读界面，支持 `.
 
 它还支持自定义图表模板、图表频率、章节标题模板、论文标题模板和屏蔽词，方便适配不同学科的学（摸）习（鱼）需求。
 
+## 预览
+
+<p align="center">
+  <sub>把小说转换成看起来像论文的双栏阅读界面，混入标题、图表、表格和章节结构。</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="figs/paper_view1.png" alt="Book2Paper 双栏论文阅读视图第一页" width="100%">
+    </td>
+    <td width="50%">
+      <img src="figs/paper_view2.png" alt="Book2Paper 双栏论文阅读视图第二页" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <br>
+      <sub>双栏会议论文视图 · 第 1 页</sub>
+    </td>
+    <td align="center">
+      <br>
+      <sub>双栏会议论文视图 · 第 2 页</sub>
+    </td>
+  </tr>
+</table>
+
+<details>
+<summary>设置与模板预览</summary>
+
+<br>
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="figs/setup1.png" alt="论文模板与图表频率设置" width="100%">
+      <br>
+      <sub>调节论文模板、真实文本统计图表和图表出现频率。</sub>
+    </td>
+    <td width="50%">
+      <img src="figs/setup2.png" alt="章节标题与排版外观设置" width="100%">
+      <br>
+      <sub>自定义文章标题、章节名模板和整体排版外观。</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="figs/template.png" alt="图表模板预览" width="100%">
+      <br>
+      <sub>预览和选择图表模板。</sub>
+    </td>
+    <td width="50%">
+      <img src="figs/block.png" alt="屏蔽词编辑" width="100%">
+      <br>
+      <sub>添加屏蔽词后可以重新生成图表，避免出现过于显眼的文本特征。</sub>
+    </td>
+  </tr>
+</table>
+
+</details>
+
 ## 功能
 
 - 支持导入 `.epub` / `.txt`
