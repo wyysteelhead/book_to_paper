@@ -182,7 +182,7 @@ export function LibraryView(): JSX.Element {
                   checked={hidePageHeader}
                   onChange={(event) => setHidePageHeader(event.currentTarget.checked)}
                 />
-                隐藏论文页眉标题行
+                滚动时自动隐藏顶部栏
               </label>
             </div>
             <div className="figure-frequency-settings">

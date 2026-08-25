@@ -1088,6 +1088,23 @@ p {
   border-bottom: 1px solid #d7d2c8;
   background: rgba(243, 242, 238, 0.94);
   backdrop-filter: blur(12px);
+  transform: translateY(0);
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
+.reader-view.toolbar-auto-hide .reader-toolbar.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-72px);
+}
+
+.reader-toolbar-hover-zone {
+  position: fixed;
+  z-index: 9;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 48px;
 }
 
 .export-status {
@@ -1170,6 +1187,58 @@ p {
 .chart-measure-host .figure-block {
   margin: 0;
   overflow: visible;
+}
+
+.page-context-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 188px;
+  padding: 6px;
+  background: #fffefa;
+  border: 1px solid #cfc7b8;
+  box-shadow: 0 18px 42px rgba(31, 29, 24, 0.18);
+}
+
+.page-context-menu button {
+  width: 100%;
+  padding: 9px 10px;
+  color: #2f2c26;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.page-context-menu button:hover {
+  background: #f0ece2;
+}
+
+.reflow-confirm-panel {
+  width: min(520px, calc(100vw - 48px));
+  padding: 24px;
+  background: #fffefa;
+  border: 1px solid #d2cabd;
+  box-shadow: 0 24px 70px rgba(31, 29, 24, 0.2);
+}
+
+.reflow-confirm-panel header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.reflow-confirm-panel h2 {
+  margin: 3px 0 0;
+  font-size: 22px;
+}
+
+.reflow-confirm-panel p {
+  margin: 0 0 18px;
+  color: #5f5a50;
+  line-height: 1.7;
 }
 
 .paper-page {

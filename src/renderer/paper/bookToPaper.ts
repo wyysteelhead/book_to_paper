@@ -14,7 +14,7 @@ import { extractKeywords } from "./keywords";
 import { generateFigures } from "./generateFigures";
 import { getPaperTemplate } from "./templates";
 import { scorePage } from "./pageScoring";
-import { compactInlineLayouts, packFiguresByUnits } from "./chartConfigs";
+import { paginateDocumentWithFiguresFirst } from "../reader/measuredPagination";
 
 type ParagraphEntry = {
   text: string;
@@ -24,16 +24,6 @@ type ParagraphEntry = {
   sourceChapterTitle: string;
   isSectionStart: boolean;
 };
-
-const pageCharBudget = {
-  "single-column-report": 1900,
-  "double-column-conference": 2850
-} satisfies Record<PaperTemplateId, number>;
-
-const inlineFigureReserve = {
-  "single-column-report": 320,
-  "double-column-conference": 230
-} satisfies Record<PaperTemplateId, number>;
 
 export function bookToPaper(
   book: ParsedBook,
@@ -85,106 +75,33 @@ export function bookToPaper(
     workScore: scorePage("abstract")
   });
 
-  let figureCursor = 0;
   const flow = createParagraphFlow(book, language, options.sectionTitleTemplates);
-  const budget = pageCharBudget[templateId];
   const totalParagraphs = Math.max(1, flow.length);
-  let consumedParagraphs = 0;
-  let cursor = 0;
-  const chapterAnchors = new Map<
-    string,
-    { id: string; title: string; pageIndex: number; pageId: string }
-  >();
+  const flowPages = flow.map((entry, flowIndex): PaperPage => ({
+    id: `flow-item-${flowIndex}`,
+    index: pages.length + flowIndex,
+    role: "text",
+    templateId,
+    language,
+    sectionTitle: entry.sectionTitle,
+    sectionMarkers: entry.isSectionStart
+      ? [
+          {
+            paragraphIndex: 0,
+            title: entry.sectionTitle
+          }
+        ]
+      : undefined,
+    paragraphs: addCitations([entry.text], entry.chapterIndex),
+    figures: flowIndex === 0 && figures.length > 0 ? figures : undefined,
+    figure: flowIndex === 0 ? figures[0] : undefined,
+    figureLayout: flowIndex === 0 ? figures[0]?.layout : undefined,
+    sourceChapterId: entry.chapterId,
+    sourceProgress: flowIndex / totalParagraphs,
+    workScore: scorePage("text", undefined, 0.86)
+  }));
 
-  while (cursor < flow.length) {
-    const start = cursor;
-    const entries: ParagraphEntry[] = [];
-    let charCount = 0;
-    const section = flow[cursor].sectionTitle;
-    const plannedFigureUnits = plannedInlineFigureUnits(
-      figures,
-      figureCursor,
-      pages.length,
-      cursor,
-      flow.length,
-      templateId,
-      options.figureFrequency ?? "high"
-    );
-    const effectiveBudget = Math.max(
-      templateId === "double-column-conference" ? 700 : 640,
-      budget - plannedFigureUnits * inlineFigureReserve[templateId]
-    );
-
-    while (cursor < flow.length) {
-      const next = flow[cursor];
-      const nextLength = measureText(next.text);
-      const hasMinimumFill = charCount >= effectiveBudget * 0.82;
-      const wouldOverflow = charCount + nextLength > effectiveBudget;
-      const isNewSection = next.sectionTitle !== section;
-
-      if (entries.length > 0 && wouldOverflow && hasMinimumFill) break;
-      if (entries.length > 0 && isNewSection && charCount >= effectiveBudget * 0.72) break;
-
-      entries.push(next);
-      charCount += nextLength + (next.isSectionStart ? 190 : 0);
-      cursor += 1;
-    }
-
-    const candidateFigures = compactInlineLayouts(nextFigureWindow(figures, figureCursor, 8), template.columnMode);
-    const rawFiguresToAttach =
-      plannedFigureUnits > 0 && charCount <= budget - inlineFigureReserve[templateId] * 0.35
-        ? packFiguresByUnits(candidateFigures, Math.max(1, plannedFigureUnits))
-        : [];
-    const figuresToAttach = rawFiguresToAttach;
-    const figure = figuresToAttach[0];
-    const density = charCount / budget;
-    const chapterIndex = entries[0]?.chapterIndex ?? 0;
-
-    pages.push({
-      id: `page-text-${pages.length}-${start}`,
-      index: pages.length,
-      role: "text",
-      templateId,
-      language,
-      sectionTitle: section,
-      sectionMarkers: entries
-        .map((entry, index) =>
-          shouldShowPseudoSection(entry, index, start)
-            ? {
-                paragraphIndex: index,
-                title: pseudoSectionTitle(entry.chapterIndex, pages.length + index, language, options.sectionTitleTemplates)
-              }
-            : null
-        )
-        .filter((marker): marker is { paragraphIndex: number; title: string } => Boolean(marker)),
-      paragraphs: addCitations(
-        entries.map((entry) => entry.text),
-        chapterIndex
-      ),
-      figure,
-      figures: figuresToAttach.length > 0 ? figuresToAttach : undefined,
-      figureLayout: figure?.layout,
-      sourceChapterId: entries[0]?.chapterId,
-      sourceProgress: consumedParagraphs / totalParagraphs,
-      workScore: figure
-        ? Math.max(scorePage("text", undefined, density), scorePage("figure", figure.layout) - 0.08)
-        : scorePage("text", undefined, density)
-    });
-
-    for (const entry of entries) {
-      if (!chapterAnchors.has(entry.chapterId)) {
-        chapterAnchors.set(entry.chapterId, {
-          id: entry.chapterId,
-          title: entry.sourceChapterTitle,
-          pageIndex: pages.length - 1,
-          pageId: `page-text-${pages.length - 1}-${start}`
-        });
-      }
-    }
-
-    consumedParagraphs += entries.length;
-    figureCursor += figuresToAttach.length;
-  }
+  pages.push(...flowPages);
 
   pages.push({
     id: "page-references",
@@ -198,13 +115,13 @@ export function bookToPaper(
     workScore: scorePage("references")
   });
 
-  return {
+  const scaffoldDocument: PaperDocument = {
     id: `paper-${book.id}-${templateId}`,
     bookId: book.id,
     templateId,
     language,
     sourceTitle: book.title,
-    chapterAnchors: [...chapterAnchors.values()],
+    chapterAnchors: [],
     title: paperTitle,
     abstract: pages[1].paragraphs?.[0] ?? "",
     keywords,
@@ -213,6 +130,10 @@ export function bookToPaper(
     stats,
     createdAt: Date.now()
   };
+
+  return paginateDocumentWithFiguresFirst(scaffoldDocument, {
+    figureFrequency: options.figureFrequency ?? "high"
+  });
 }
 
 function academicTitle(

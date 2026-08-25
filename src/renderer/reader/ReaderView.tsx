@@ -1,12 +1,16 @@
-import { useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type Ref } from "react";
 import { ArrowLeft, Bookmark, Bot, Download, ListTree, RotateCcw, Shield, Trash2, X } from "lucide-react";
-import type { PaperDocument, PaperFigure, PaperTemplateId } from "../../common/types";
+import type { PaperDocument, PaperFigure, PaperTemplateId, ReadingBookmark } from "../../common/types";
 import { useLibraryStore } from "../library/libraryStore";
 import { paperTemplates } from "../paper/templates";
 import { FigureBlock, PaperPage } from "./PaperPage";
 import { selectAcademicTarget } from "./scrollController";
 import { useReaderStore } from "./readerStore";
-import { type FigureHeightMap, repaginateDocumentSafely } from "./measuredPagination";
+import {
+  type FigureHeightMap,
+  repaginateDocumentFromPage,
+  repaginateDocumentSafely
+} from "./measuredPagination";
 import { RedactionTermEditor } from "../library/RedactionTermEditor";
 
 type ReaderViewProps = {
@@ -17,13 +21,22 @@ const PAGE_RENDER_BUFFER = 4;
 const PAGE_STEP = 1084;
 const LAYOUT_CACHE_VERSION = 3;
 
+type PageContextMenu = {
+  pageIndex: number;
+  x: number;
+  y: number;
+};
+
 export function ReaderView({ document }: ReaderViewProps): JSX.Element {
   const [chaptersOpen, setChaptersOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [redactionOpen, setRedactionOpen] = useState(false);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
-  const [layoutDocument, setLayoutDocument] = useState(() => cachedLayoutDocument(document) ?? repaginateDocumentSafely(document));
+  const [pageContextMenu, setPageContextMenu] = useState<PageContextMenu | null>(null);
+  const [reflowConfirmPageIndex, setReflowConfirmPageIndex] = useState<number | null>(null);
+  const [toolbarVisible, setToolbarVisible] = useState(true);
+  const [layoutDocument, setLayoutDocument] = useState(() => cachedLayoutDocument(document) ?? document);
   const [figureHeights, setFigureHeights] = useState<FigureHeightMap>(() => document.layoutCache?.figureHeights ?? {});
   const [isMeasuringFigures, setIsMeasuringFigures] = useState(() => !cachedLayoutDocument(document) && collectMeasuredFigures(document).length > 0);
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
@@ -40,13 +53,15 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
   const isImporting = useLibraryStore((state) => state.isImporting);
   const setDocumentRedactionInput = useLibraryStore((state) => state.setDocumentRedactionInput);
   const refreshDocumentCharts = useLibraryStore((state) => state.refreshDocumentCharts);
-  const hidePageHeader = useLibraryStore((state) => state.hidePageHeader);
+  const autoHideToolbar = useLibraryStore((state) => state.hidePageHeader);
+  const figureFrequency = useLibraryStore((state) => state.figureFrequency);
   const readingPositions = useLibraryStore((state) => state.readingPositions);
   const readingBookmarks = useLibraryStore((state) => state.readingBookmarks);
   const saveReadingPosition = useLibraryStore((state) => state.saveReadingPosition);
   const saveDocumentLayoutCache = useLibraryStore((state) => state.saveDocumentLayoutCache);
   const addReadingBookmark = useLibraryStore((state) => state.addReadingBookmark);
   const removeReadingBookmark = useLibraryStore((state) => state.removeReadingBookmark);
+  const replaceReadingBookmarks = useLibraryStore((state) => state.replaceReadingBookmarks);
   const savedPosition = useReaderStore((state) => state.savedPosition);
   const restoreAvailable = useReaderStore((state) => state.restoreAvailable);
   const savePosition = useReaderStore((state) => state.savePosition);
@@ -92,13 +107,12 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
     } else {
       setFigureHeights({});
       const hasFigures = collectMeasuredFigures(document).length > 0;
-      const nextDocument = repaginateDocumentSafely(document);
       setIsMeasuringFigures(hasFigures);
-      setLayoutDocument(nextDocument);
+      setLayoutDocument(document);
       if (!hasFigures) {
         saveDocumentLayoutCache(document.id, {
           version: LAYOUT_CACHE_VERSION,
-          pages: nextDocument.pages,
+          pages: document.pages,
           figureHeights: {},
           createdAt: Date.now()
         });
@@ -126,7 +140,10 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
       return;
     }
     setFigureHeights(nextHeights);
-    const nextDocument = repaginateDocumentSafely(document, { figureHeights: nextHeights });
+    const nextDocument = repaginateDocumentSafely(document, {
+      figureFrequency,
+      figureHeights: nextHeights
+    });
     setLayoutDocument(nextDocument);
     saveDocumentLayoutCache(document.id, {
       version: LAYOUT_CACHE_VERSION,
@@ -135,7 +152,7 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
       createdAt: Date.now()
     });
     setIsMeasuringFigures(false);
-  }, [document, isMeasuringFigures, saveDocumentLayoutCache]);
+  }, [document, figureFrequency, isMeasuringFigures, saveDocumentLayoutCache]);
 
   useLayoutEffect(() => {
     if (hasRestoredInitialPosition.current) return;
@@ -206,6 +223,21 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
   }, [renderAllPages, saveReadingPosition, visibleDocument.id, visibleDocument.pages.length]);
 
   useEffect(() => {
+    if (!autoHideToolbar) {
+      setToolbarVisible(true);
+      return;
+    }
+
+    setToolbarVisible(true);
+    const updateToolbarVisibility = () => {
+      setToolbarVisible(window.scrollY < 96);
+    };
+
+    window.addEventListener("scroll", updateToolbarVisibility, { passive: true });
+    return () => window.removeEventListener("scroll", updateToolbarVisibility);
+  }, [autoHideToolbar, visibleDocument.id]);
+
+  useEffect(() => {
     return () => {
       if (bookmarkCloseTimer.current) window.clearTimeout(bookmarkCloseTimer.current);
       if (!hasRestoredInitialPosition.current) return;
@@ -216,6 +248,24 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
       });
     };
   }, [currentPageIndex, saveReadingPosition, visibleDocument.id]);
+
+  useEffect(() => {
+    if (!pageContextMenu) return;
+
+    const closeMenu = () => setPageContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("scroll", closeMenu, { passive: true });
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("scroll", closeMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [pageContextMenu]);
 
   const simulateVisitor = (): void => {
     savePosition({
@@ -266,6 +316,59 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
     }
   };
 
+  const openPageContextMenu = (event: MouseEvent<HTMLDivElement>): void => {
+    const pageNode = (event.target as HTMLElement | null)?.closest<HTMLElement>(".paper-page[data-page-index]");
+    if (!pageNode || !paperStackRef.current?.contains(pageNode)) return;
+    const pageIndex = Number(pageNode.dataset.pageIndex);
+    if (!Number.isInteger(pageIndex)) return;
+    event.preventDefault();
+    setPageContextMenu({
+      pageIndex,
+      x: event.clientX,
+      y: event.clientY
+    });
+  };
+
+  const confirmReflowFromPage = (): void => {
+    if (!pageContextMenu) return;
+    setReflowConfirmPageIndex(pageContextMenu.pageIndex);
+    setPageContextMenu(null);
+  };
+
+  const reflowFromPage = (pageIndex: number): void => {
+    const repairedBookmarks = remapBookmarksAfterReflow(bookmarks, visibleDocument, pageIndex);
+    const nextDocument = repaginateDocumentFromPage(visibleDocument, pageIndex, {
+      figureFrequency,
+      figureHeights
+    });
+    const nextBookmarks = repairedBookmarks(nextDocument);
+    setLayoutDocument(nextDocument);
+    saveDocumentLayoutCache(nextDocument.id, {
+      version: LAYOUT_CACHE_VERSION,
+      pages: nextDocument.pages,
+      figureHeights,
+      createdAt: Date.now()
+    });
+    replaceReadingBookmarks(nextDocument.id, nextBookmarks);
+    const nextPageIndex = Math.max(0, Math.min(nextDocument.pages.length - 1, pageIndex));
+    currentPageIndexRef.current = nextPageIndex;
+    setCurrentPageIndex(nextPageIndex);
+    setReflowConfirmPageIndex(null);
+    window.requestAnimationFrame(() => {
+      const page = nextDocument.pages[nextPageIndex];
+      const node = page
+        ? window.document.querySelector<HTMLElement>(`[data-page-id="${page.id}"]`)
+        : null;
+      if (node) {
+        node.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+      const stackTop = paperStackRef.current?.getBoundingClientRect().top ?? 0;
+      const absoluteStackTop = window.scrollY + stackTop;
+      window.scrollTo({ top: absoluteStackTop + nextPageIndex * PAGE_STEP, behavior: "smooth" });
+    });
+  };
+
   const scrollToPageIndex = (pageIndex: number): void => {
     const page = visibleDocument.pages[pageIndex];
     if (!page) return;
@@ -284,8 +387,20 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
   };
 
   return (
-    <section className="reader-view">
-      <header className="reader-toolbar">
+    <section className={`reader-view ${autoHideToolbar ? "toolbar-auto-hide" : ""}`}>
+      {autoHideToolbar ? (
+        <div
+          className="reader-toolbar-hover-zone"
+          onMouseEnter={() => setToolbarVisible(true)}
+          aria-hidden="true"
+        />
+      ) : null}
+      <header
+        className={`reader-toolbar ${autoHideToolbar && !toolbarVisible ? "hidden" : ""}`}
+        onMouseEnter={() => {
+          if (autoHideToolbar) setToolbarVisible(true);
+        }}
+      >
         <button className="icon-button" onClick={closeDocument} aria-label="返回书库">
           <ArrowLeft size={18} />
         </button>
@@ -370,18 +485,22 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
 
       {isMeasuringFigures ? <LayoutProgress /> : null}
 
-      <div className={`paper-stack ${isMeasuringFigures ? "layout-measuring" : ""}`} ref={paperStackRef}>
+      <div
+        className={`paper-stack ${isMeasuringFigures ? "layout-measuring" : ""}`}
+        ref={paperStackRef}
+        onContextMenu={openPageContextMenu}
+      >
         {topSpacerHeight > 0 ? (
           <div className="paper-stack-spacer" style={{ height: topSpacerHeight }} aria-hidden="true" />
         ) : null}
         {renderedPages.map((page) => (
           <PaperPage
             key={page.id}
-            page={page}
-            documentTitle={visibleDocument.title}
-            hidePageHeader={hidePageHeader}
-            figureHeights={figureHeights}
-          />
+              page={page}
+              documentTitle={visibleDocument.title}
+              hidePageHeader={false}
+              figureHeights={figureHeights}
+            />
         ))}
         {bottomSpacerHeight > 0 ? (
           <div className="paper-stack-spacer" style={{ height: bottomSpacerHeight }} aria-hidden="true" />
@@ -389,6 +508,49 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
       </div>
 
       <ChartMeasureHost documentData={visibleDocument} measureRef={figureMeasureRef} />
+
+      {pageContextMenu ? (
+        <div
+          className="page-context-menu"
+          style={{
+            left: pageContextMenu.x,
+            top: pageContextMenu.y
+          }}
+          role="menu"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button onClick={confirmReflowFromPage} role="menuitem">
+            渲染异常，从此页重排
+          </button>
+        </div>
+      ) : null}
+
+      {reflowConfirmPageIndex !== null ? (
+        <div className="import-overlay" role="presentation" onMouseDown={() => setReflowConfirmPageIndex(null)}>
+          <section className="reflow-confirm-panel" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <p className="eyebrow">Layout Repair</p>
+                <h2>从第 {reflowConfirmPageIndex + 1} 页之后重新分页？</h2>
+              </div>
+              <button className="icon-button subtle" onClick={() => setReflowConfirmPageIndex(null)}>
+                <X size={18} />
+              </button>
+            </header>
+            <p>
+              这会保留前面的页面，从当前页开始重新计算正文和图表位置。文章比较长时可能会稍慢。
+            </p>
+            <div className="redaction-actions">
+              <button className="secondary-button" onClick={() => setReflowConfirmPageIndex(null)}>
+                取消
+              </button>
+              <button className="primary-button" onClick={() => reflowFromPage(reflowConfirmPageIndex)}>
+                现在重新分页
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {chaptersOpen ? (
         <aside className="chapter-drawer">
@@ -553,6 +715,64 @@ function cachedLayoutDocument(documentData: PaperDocument): PaperDocument | null
     ...documentData,
     pages: cache.pages
   };
+}
+
+function remapBookmarksAfterReflow(
+  bookmarks: ReadingBookmark[],
+  oldDocument: PaperDocument,
+  reflowStartPageIndex: number
+): (newDocument: PaperDocument) => ReadingBookmark[] {
+  const bookmarkTargets = bookmarks.map((bookmark) => {
+    const oldPage = oldDocument.pages[bookmark.pageIndex];
+    return {
+      bookmark,
+      shouldRemap: bookmark.pageIndex >= reflowStartPageIndex,
+      sourceProgress: oldPage?.sourceProgress ?? bookmark.pageIndex / Math.max(1, oldDocument.pages.length - 1),
+      sourceChapterId: oldPage?.sourceChapterId,
+      role: oldPage?.role
+    };
+  });
+
+  return (newDocument) =>
+    bookmarkTargets.map(({ bookmark, shouldRemap, sourceProgress, sourceChapterId, role }) => {
+      if (!shouldRemap) return bookmark;
+      const nextPageIndex = findNearestReflowedPageIndex(newDocument, reflowStartPageIndex, {
+        sourceProgress,
+        sourceChapterId,
+        role
+      });
+      return {
+        ...bookmark,
+        pageIndex: nextPageIndex
+      };
+    });
+}
+
+function findNearestReflowedPageIndex(
+  documentData: PaperDocument,
+  reflowStartPageIndex: number,
+  target: {
+    sourceProgress: number;
+    sourceChapterId?: string;
+    role?: string;
+  }
+): number {
+  let bestIndex = Math.max(0, Math.min(documentData.pages.length - 1, reflowStartPageIndex));
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const page of documentData.pages) {
+    if (page.index < reflowStartPageIndex) continue;
+    const progressScore = Math.abs(page.sourceProgress - target.sourceProgress);
+    const chapterPenalty = target.sourceChapterId && page.sourceChapterId !== target.sourceChapterId ? 0.08 : 0;
+    const rolePenalty = target.role && page.role !== target.role ? 0.14 : 0;
+    const score = progressScore + chapterPenalty + rolePenalty;
+    if (score < bestScore) {
+      bestScore = score;
+      bestIndex = page.index;
+    }
+  }
+
+  return bestIndex;
 }
 
 function waitForPaint(): Promise<void> {

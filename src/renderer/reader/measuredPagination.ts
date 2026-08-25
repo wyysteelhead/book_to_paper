@@ -1,4 +1,4 @@
-import type { ChartType, PaperColumn, PaperDocument, PaperFigure, PaperPage } from "../../common/types";
+import type { ChartType, FigureFrequency, PaperColumn, PaperDocument, PaperFigure, PaperPage } from "../../common/types";
 
 type ParagraphItem = {
   marker?: string;
@@ -41,7 +41,14 @@ const MIN_TEXT_WITH_DOUBLE_FIGURE = 360;
 
 export function repaginateDocumentSafely(
   documentData: PaperDocument,
-  options: { figureHeights?: FigureHeightMap } = {}
+  options: { figureFrequency?: FigureFrequency; figureHeights?: FigureHeightMap } = {}
+): PaperDocument {
+  return paginateDocumentWithFiguresFirst(documentData, options);
+}
+
+export function paginateDocumentWithFiguresFirst(
+  documentData: PaperDocument,
+  options: { figureFrequency?: FigureFrequency; figureHeights?: FigureHeightMap } = {}
 ): PaperDocument {
   const sourcePages = withoutFormulaEstimatePage(documentData.pages);
   const firstTextIndex = sourcePages.findIndex((page) => page.role === "text");
@@ -52,16 +59,16 @@ export function repaginateDocumentSafely(
   if (flow.length === 0) return documentData;
 
   const sourceTextPages = sourcePages.slice(firstTextIndex, lastTextIndex + 1);
-  const figurePool = collectSafeInlineFigures(sourceTextPages);
-  const placementInterval = inferFigurePlacementInterval(sourceTextPages, figurePool.length);
+  const figurePool = collectSafeInlineFigures(sourceTextPages, options.figureFrequency);
+  const placementInterval = inferFigurePlacementInterval(sourceTextPages, figurePool.length, options.figureFrequency);
   const prefix = sourcePages.slice(0, firstTextIndex);
   const suffix = sourcePages.slice(lastTextIndex + 1);
   const sourcePage =
     sourcePages.find((page) => page.role === "text") ?? sourcePages[firstTextIndex];
   const textPages =
     sourcePage.templateId === "double-column-conference"
-      ? buildSafeDoublePages(flow, figurePool, sourcePage, placementInterval, options.figureHeights)
-      : buildSafeSinglePages(flow, figurePool, sourcePage, placementInterval, options.figureHeights);
+      ? buildSafeDoublePages(flow, figurePool, sourcePage, placementInterval, options.figureFrequency, options.figureHeights)
+      : buildSafeSinglePages(flow, figurePool, sourcePage, placementInterval, options.figureFrequency, options.figureHeights);
   const pages = [...prefix, ...textPages, ...suffix].map((page, index) => ({
     ...page,
     index
@@ -72,6 +79,57 @@ export function repaginateDocumentSafely(
     pages,
     chapterAnchors: rebuildChapterAnchors(documentData, pages)
   };
+}
+
+export function repaginateDocumentFromPage(
+  documentData: PaperDocument,
+  pageIndex: number,
+  options: { figureFrequency?: FigureFrequency; figureHeights?: FigureHeightMap } = {}
+): PaperDocument {
+  const sourcePages = withoutFormulaEstimatePage(documentData.pages);
+  const firstTextIndex = sourcePages.findIndex((page) => page.role === "text");
+  const lastTextIndex = findLastTextPageIndex(sourcePages);
+  if (firstTextIndex < 0 || lastTextIndex < firstTextIndex) return documentData;
+
+  const boundedIndex = Math.max(firstTextIndex, Math.min(lastTextIndex, pageIndex));
+  const reflowStartIndex = findTextReflowStartIndex(sourcePages, boundedIndex, firstTextIndex);
+  const prefix = sourcePages.slice(0, reflowStartIndex);
+  const suffix = sourcePages.slice(lastTextIndex + 1);
+  const reflowSourcePages = sourcePages.slice(reflowStartIndex, lastTextIndex + 1);
+  const flow = flattenTextFlow(reflowSourcePages);
+  if (flow.length === 0) return documentData;
+
+  const figurePool = collectSafeInlineFigures(reflowSourcePages, options.figureFrequency);
+  const placementInterval = inferFigurePlacementInterval(reflowSourcePages, figurePool.length, options.figureFrequency);
+  const sourcePage =
+    reflowSourcePages.find((page) => page.role === "text") ??
+    sourcePages[firstTextIndex];
+  const textPages =
+    sourcePage.templateId === "double-column-conference"
+      ? buildSafeDoublePages(flow, figurePool, sourcePage, placementInterval, options.figureFrequency, options.figureHeights)
+      : buildSafeSinglePages(flow, figurePool, sourcePage, placementInterval, options.figureFrequency, options.figureHeights);
+  const pages = [...prefix, ...textPages, ...suffix].map((page, index) => ({
+    ...page,
+    id: page.role === "text" && index >= reflowStartIndex ? `${page.id}-manual-${reflowStartIndex}` : page.id,
+    index
+  }));
+
+  return {
+    ...documentData,
+    pages,
+    chapterAnchors: rebuildChapterAnchors(documentData, pages)
+  };
+}
+
+function findTextReflowStartIndex(
+  pages: PaperPage[],
+  pageIndex: number,
+  firstTextIndex: number
+): number {
+  for (let index = pageIndex; index >= firstTextIndex; index -= 1) {
+    if (pages[index].role === "text") return index;
+  }
+  return firstTextIndex;
 }
 
 function withoutFormulaEstimatePage(pages: PaperPage[]): PaperPage[] {
@@ -380,20 +438,36 @@ function flattenTextFlow(pages: PaperPage[]): FlowItem[] {
   });
 }
 
-function collectSafeInlineFigures(pages: PaperPage[]): PaperFigure[] {
+function collectSafeInlineFigures(pages: PaperPage[], frequency: FigureFrequency = "high"): PaperFigure[] {
   const figures = pages
     .flatMap((page) => page.figures ?? (page.figure ? [page.figure] : []))
     .filter((figure) => figure.chartType !== "formula");
   const textPageCount = Math.max(1, pages.filter((page) => page.role === "text").length);
-  const maxInlineFigures = Math.max(4, Math.ceil(textPageCount * 0.38));
+  const density = safeFigureDensityForFrequency(frequency);
+  const maxInlineFigures = Math.max(4, Math.ceil(textPageCount * density));
   if (figures.length <= maxInlineFigures) return figures;
 
   const step = figures.length / maxInlineFigures;
   return Array.from({ length: maxInlineFigures }).map((_, index) => figures[Math.floor(index * step)]);
 }
 
-function inferFigurePlacementInterval(pages: PaperPage[], figureCount: number): number {
+function safeFigureDensityForFrequency(frequency: FigureFrequency): number {
+  if (frequency === "low") return 0.22;
+  if (frequency === "standard") return 0.38;
+  if (frequency === "high") return 0.62;
+  return 0.82;
+}
+
+function inferFigurePlacementInterval(
+  pages: PaperPage[],
+  figureCount: number,
+  frequency: FigureFrequency = "high"
+): number {
   if (figureCount <= 0) return Number.POSITIVE_INFINITY;
+  if (frequency === "dense") return 1;
+  if (frequency === "high") return 1;
+  if (frequency === "standard") return 2;
+  if (frequency === "low") return 4;
   const textPageCount = Math.max(1, pages.filter((page) => page.role === "text").length);
   const sourceFigurePages = pages.filter((page) => (page.figures?.length ?? (page.figure ? 1 : 0)) > 0).length;
   const pageDensity = sourceFigurePages / textPageCount;
@@ -408,6 +482,7 @@ function buildSafeSinglePages(
   figurePool: PaperFigure[],
   sourcePage: PaperPage,
   placementInterval: number,
+  frequency: FigureFrequency = "high",
   figureHeights: FigureHeightMap | undefined
 ): PaperPage[] {
   const queue = [...flow];
@@ -415,20 +490,20 @@ function buildSafeSinglePages(
   let figureCursor = 0;
 
   while (queue.length > 0) {
-    let figure = shouldPlaceFigure(pages.length, figureCursor, figurePool, placementInterval)
-      ? normalizeFigureForTemplate(figurePool[figureCursor], sourcePage.templateId)
-      : null;
-    let textBudget = SAFE_SINGLE_HEIGHT - (figure ? figureSlotHeight(figure, "single", figureHeights) : 0);
-    if (figure && estimatedQueueTextHeight(queue, textBudget, "single") < MIN_TEXT_WITH_SINGLE_FIGURE) {
-      figure = null;
-      textBudget = SAFE_SINGLE_HEIGHT;
+    const figures = takeFiguresForPage(figurePool, figureCursor, pageFigureCount(frequency, pages.length, "single"), sourcePage.templateId);
+    let textBudget = Math.max(
+      180,
+      SAFE_SINGLE_HEIGHT - figures.reduce((sum, figure) => sum + figureSlotHeight(figure, "single", figureHeights), 0)
+    );
+    if (figures.length > 0 && estimatedQueueTextHeight(queue, textBudget, "single") < MIN_TEXT_WITH_SINGLE_FIGURE * 0.45) {
+      textBudget = Math.max(textBudget, SAFE_SINGLE_HEIGHT * 0.34);
     }
     const items = takeItemsForBudget(queue, textBudget, "single");
     if (items.length === 0) {
       items.push(forceTakeOneItem(queue, "single"));
     }
-    if (figure) figureCursor += 1;
-    pages.push(buildSafeTextPage(sourcePage, pages.length, items, undefined, figure ? [figure] : []));
+    figureCursor += figures.length;
+    pages.push(buildSafeTextPage(sourcePage, pages.length, items, undefined, figures));
   }
 
   return pages;
@@ -439,6 +514,7 @@ function buildSafeDoublePages(
   figurePool: PaperFigure[],
   sourcePage: PaperPage,
   placementInterval: number,
+  frequency: FigureFrequency = "high",
   figureHeights: FigureHeightMap | undefined
 ): PaperPage[] {
   const queue = [...flow];
@@ -446,17 +522,17 @@ function buildSafeDoublePages(
   let figureCursor = 0;
 
   while (queue.length > 0) {
-    let figure = shouldPlaceFigure(pages.length, figureCursor, figurePool, placementInterval)
-      ? normalizeFigureForTemplate(figurePool[figureCursor], sourcePage.templateId)
-      : null;
-    const figurePlacement = figure && pages.length % 4 === 3 ? "right" : "left";
-    let leftBudget = SAFE_DOUBLE_COLUMN_HEIGHT - (figure && figurePlacement === "left" ? figureSlotHeight(figure, "double", figureHeights) : 0);
-    let rightBudget = SAFE_DOUBLE_COLUMN_HEIGHT - (figure && figurePlacement === "right" ? figureSlotHeight(figure, "double", figureHeights) : 0);
-    if (figure && estimatedQueueTextHeight(queue, leftBudget + rightBudget, "double") < MIN_TEXT_WITH_DOUBLE_FIGURE) {
-      figure = null;
-      leftBudget = SAFE_DOUBLE_COLUMN_HEIGHT;
-      rightBudget = SAFE_DOUBLE_COLUMN_HEIGHT;
-    }
+    const figures = takeFiguresForPage(figurePool, figureCursor, pageFigureCount(frequency, pages.length, "double"), sourcePage.templateId);
+    const leftFigureHeight = figuresAtColumnPositions(figures, [0, 2]).reduce(
+      (sum, figure) => sum + figureSlotHeight(figure, "double", figureHeights),
+      0
+    );
+    const rightFigureHeight = figuresAtColumnPositions(figures, [1, 3]).reduce(
+      (sum, figure) => sum + figureSlotHeight(figure, "double", figureHeights),
+      0
+    );
+    const leftBudget = Math.max(150, SAFE_DOUBLE_COLUMN_HEIGHT - leftFigureHeight);
+    const rightBudget = Math.max(150, SAFE_DOUBLE_COLUMN_HEIGHT - rightFigureHeight);
     const leftItems = takeItemsForBudget(queue, leftBudget, "double");
     if (leftItems.length === 0) {
       leftItems.push(forceTakeOneItem(queue, "double"));
@@ -465,7 +541,7 @@ function buildSafeDoublePages(
     if (rightItems.length === 0 && queue.length > 0) {
       rightItems.push(forceTakeOneItem(queue, "double"));
     }
-    if (figure) figureCursor += 1;
+    figureCursor += figures.length;
 
     const columns = [
       columnFromItems(leftItems),
@@ -476,21 +552,72 @@ function buildSafeDoublePages(
       pages.length,
       [...leftItems, ...rightItems],
       columns,
-      figure ? [figure] : [],
-      figure ? figurePlacement : undefined
+      figures
     ));
   }
 
   return pages;
 }
 
-function shouldPlaceFigure(
+function pageFigureCount(
+  frequency: FigureFrequency,
   pageIndex: number,
-  figureCursor: number,
+  template: "single" | "double"
+): number {
+  const roll = stablePageRandom(pageIndex, template);
+  if (template === "single") {
+    if (frequency === "dense") return roll > 0.72 ? 2 : 1;
+    if (frequency === "high") return roll > 0.78 ? 2 : roll > 0.2 ? 1 : 0;
+    if (frequency === "standard") return roll > 0.48 ? 1 : 0;
+    return roll > 0.78 ? 1 : 0;
+  }
+  if (frequency === "dense") return roll > 0.76 ? 3 : roll > 0.38 ? 2 : 1;
+  if (frequency === "high") return roll > 0.68 ? 2 : roll > 0.18 ? 1 : 0;
+  if (frequency === "standard") return roll > 0.52 ? 1 : 0;
+  return roll > 0.82 ? 1 : 0;
+}
+
+function stablePageRandom(pageIndex: number, template: "single" | "double"): number {
+  let hash = template === "double" ? 2166136261 : 16777619;
+  hash ^= pageIndex + 1;
+  hash = Math.imul(hash, 16777619);
+  hash ^= (pageIndex + 11) * 2654435761;
+  hash = Math.imul(hash, 2246822519);
+  return (hash >>> 0) / 4294967295;
+}
+
+function takeFiguresForPage(
   figurePool: PaperFigure[],
-  placementInterval: number
-): boolean {
-  return figureCursor < figurePool.length && pageIndex > 0 && pageIndex % placementInterval === 0;
+  figureCursor: number,
+  count: number,
+  templateId: PaperPage["templateId"]
+): PaperFigure[] {
+  if (count <= 0 || figurePool.length === 0) return [];
+  return Array.from({ length: count }).map((_, offset) =>
+    normalizeFigureForTemplate(figureAtCursor(figurePool, figureCursor + offset), templateId)
+  );
+}
+
+function figuresAtColumnPositions(figures: PaperFigure[], positions: number[]): PaperFigure[] {
+  return positions
+    .map((position) => figures[position])
+    .filter((figure): figure is PaperFigure => Boolean(figure));
+}
+
+function figureAtCursor(figurePool: PaperFigure[], cursor: number): PaperFigure {
+  const source = figurePool[cursor % figurePool.length];
+  const cycle = Math.floor(cursor / figurePool.length);
+  if (cycle === 0) {
+    return {
+      ...source,
+      number: cursor + 1
+    };
+  }
+  return {
+    ...source,
+    id: `${source.id}-cycle-${cycle}`,
+    number: cursor + 1
+  };
 }
 
 function normalizeFigureForTemplate(figure: PaperFigure, templateId: PaperPage["templateId"]): PaperFigure {
@@ -959,6 +1086,24 @@ function rebuildPages(
 }
 
 function rebuildChapterAnchors(documentData: PaperDocument, pages: PaperPage[]): PaperDocument["chapterAnchors"] {
+  if (documentData.chapterAnchors.length === 0) {
+    const seen = new Set<string>();
+    return pages
+      .filter((page) => page.role === "text" && page.sourceChapterId)
+      .map((page) => {
+        const id = page.sourceChapterId ?? page.id;
+        if (seen.has(id)) return null;
+        seen.add(id);
+        return {
+          id,
+          title: page.sectionTitle ?? page.title ?? id,
+          pageIndex: page.index,
+          pageId: page.id
+        };
+      })
+      .filter((anchor): anchor is { id: string; title: string; pageIndex: number; pageId: string } => Boolean(anchor));
+  }
+
   return documentData.chapterAnchors.map((anchor) => {
     const page = pages.find((candidate) => candidate.sourceChapterId === anchor.id) ?? pages[anchor.pageIndex];
     return {

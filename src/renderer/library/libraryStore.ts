@@ -71,6 +71,7 @@ type LibraryState = {
   saveReadingPosition: (documentId: string, position: ReadingPosition) => void;
   addReadingBookmark: (documentId: string, bookmark: ReadingBookmark) => void;
   removeReadingBookmark: (documentId: string, bookmarkId: string) => void;
+  replaceReadingBookmarks: (documentId: string, bookmarks: ReadingBookmark[]) => void;
   saveCustomChartTemplate: (template: CustomChartTemplate) => void;
   setCustomChartTemplateEnabled: (templateId: string, enabled: boolean) => void;
   removeCustomChartTemplate: (templateId: string) => void;
@@ -133,8 +134,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   importError: null,
   useRealStats: true,
   statsTimeoutMs: 2500,
-  figureFrequency: "standard",
-  hidePageHeader: false,
+  figureFrequency: "high",
+  hidePageHeader: true,
   enabledChartTypes: defaultEnabledChartTypes,
   paperTitleTemplatesInput: defaultPaperTitleTemplates.join("\n"),
   sectionTitleTemplatesInput: defaultSectionTitleTemplates.join("\n"),
@@ -155,20 +156,36 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   hydrateLibrary: async () => {
     const cached = await window.book2paper?.loadLibraryCache?.();
     if (!cached) return;
+    const sourceBooks = cached.sourceBooks ?? {};
+    const paperTitleTemplatesInput = cached.settings?.paperTitleTemplatesInput ?? defaultPaperTitleTemplates.join("\n");
+    const sectionTitleTemplatesInput = cached.settings?.sectionTitleTemplatesInput ?? defaultSectionTitleTemplates.join("\n");
+    const figureFrequency = cached.settings?.figureFrequency ?? "high";
+    const enabledChartTypes = mergeEnabledChartTypes(cached.settings?.enabledChartTypes);
+    const customChartTemplates = normalizeCustomChartTemplates(cached.customChartTemplates);
+    const documents = repairDenseMarkerDocuments(cached.documents ?? [], sourceBooks, {
+      paperTitleTemplatesInput,
+      sectionTitleTemplatesInput,
+      figureFrequency,
+      enabledChartTypes,
+      customChartTemplates
+    });
     set({
-      documents: cached.documents ?? [],
-      sourceBooks: cached.sourceBooks ?? {},
+      documents,
+      sourceBooks,
       documentRedactions: cached.documentRedactions ?? {},
       readingPositions: cached.readingPositions ?? {},
       readingBookmarks: normalizeReadingBookmarks(cached.readingBookmarks),
-      customChartTemplates: normalizeCustomChartTemplates(cached.customChartTemplates),
-      paperTitleTemplatesInput: cached.settings?.paperTitleTemplatesInput ?? defaultPaperTitleTemplates.join("\n"),
-      sectionTitleTemplatesInput: cached.settings?.sectionTitleTemplatesInput ?? defaultSectionTitleTemplates.join("\n"),
-      figureFrequency: cached.settings?.figureFrequency ?? "standard",
-      hidePageHeader: cached.settings?.hidePageHeader ?? false,
-      enabledChartTypes: mergeEnabledChartTypes(cached.settings?.enabledChartTypes),
+      customChartTemplates,
+      paperTitleTemplatesInput,
+      sectionTitleTemplatesInput,
+      figureFrequency,
+      hidePageHeader: cached.settings?.hidePageHeader ?? true,
+      enabledChartTypes,
       templateId: cached.settings?.templateId ?? "double-column-conference"
     });
+    if (documents !== (cached.documents ?? [])) {
+      void persistLibraryCacheNow(libraryCacheFromState(get()));
+    }
   },
   importBook: async () => {
     try {
@@ -381,6 +398,15 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }));
     void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
+  replaceReadingBookmarks: (documentId, bookmarks) => {
+    set((state) => ({
+      readingBookmarks: {
+        ...state.readingBookmarks,
+        [documentId]: normalizeBookmarkList(bookmarks)
+      }
+    }));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
+  },
   saveCustomChartTemplate: (template) => {
     set((state) => ({
       customChartTemplates: [
@@ -538,6 +564,47 @@ type PersistableState = {
 
 let scheduledPersistTimer: number | null = null;
 
+function repairDenseMarkerDocuments(
+  documents: PaperDocument[],
+  sourceBooks: Record<string, ParsedBook>,
+  settings: {
+    paperTitleTemplatesInput: string;
+    sectionTitleTemplatesInput: string;
+    figureFrequency: FigureFrequency;
+    enabledChartTypes: Record<ChartType, boolean>;
+    customChartTemplates: CustomChartTemplate[];
+  }
+): PaperDocument[] {
+  let changed = false;
+  const repaired = documents.map((document) => {
+    if (!hasDenseSectionMarkers(document)) return document;
+    const sourceBook = sourceBooks[document.bookId];
+    if (!sourceBook) return document;
+    changed = true;
+    const regenerated = bookToPaper(sourceBook, document.templateId, document.stats, {
+      figureFrequency: settings.figureFrequency,
+      paperTitleTemplates: parseTemplateLines(settings.paperTitleTemplatesInput),
+      sectionTitleTemplates: parseSectionTitleTemplates(settings.sectionTitleTemplatesInput),
+      enabledChartTypes: enabledChartTypeList(settings.enabledChartTypes),
+      customChartTemplates: enabledCustomChartTemplates(settings.customChartTemplates)
+    });
+    return {
+      ...regenerated,
+      id: document.id,
+      createdAt: document.createdAt
+    };
+  });
+  return changed ? repaired : documents;
+}
+
+function hasDenseSectionMarkers(document: PaperDocument): boolean {
+  const textPages = document.pages.filter((page) => page.role === "text");
+  const sampledPages = textPages.slice(0, 16);
+  const paragraphCount = sampledPages.reduce((sum, page) => sum + (page.paragraphs?.length ?? 0), 0);
+  const markerCount = sampledPages.reduce((sum, page) => sum + (page.sectionMarkers?.length ?? 0), 0);
+  return paragraphCount >= 12 && markerCount / Math.max(1, paragraphCount) > 0.45;
+}
+
 function libraryCacheFromState(state: LibraryState): PersistableState {
   return {
     documents: state.documents,
@@ -609,18 +676,24 @@ function normalizeReadingBookmarks(
   bookmarks: Record<string, ReadingBookmark[]> | undefined
 ): Record<string, ReadingBookmark[]> {
   return Object.fromEntries(
-    Object.entries(bookmarks ?? {}).map(([documentId, documentBookmarks]) => {
-      const seenPages = new Set<number>();
-      return [
-        documentId,
-        documentBookmarks.filter((bookmark) => {
-          if (seenPages.has(bookmark.pageIndex)) return false;
-          seenPages.add(bookmark.pageIndex);
-          return true;
-        })
-      ];
-    })
+    Object.entries(bookmarks ?? {}).map(([documentId, documentBookmarks]) => [
+      documentId,
+      normalizeBookmarkList(documentBookmarks)
+    ])
   );
+}
+
+function normalizeBookmarkList(bookmarks: ReadingBookmark[]): ReadingBookmark[] {
+  const seenPages = new Set<number>();
+  return bookmarks
+    .slice()
+    .sort((first, second) => first.pageIndex - second.pageIndex || second.createdAt - first.createdAt)
+    .filter((bookmark) => {
+      if (seenPages.has(bookmark.pageIndex)) return false;
+      seenPages.add(bookmark.pageIndex);
+      return true;
+    })
+    .slice(0, 40);
 }
 
 function normalizeCustomChartTemplates(

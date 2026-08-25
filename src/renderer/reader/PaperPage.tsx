@@ -49,7 +49,7 @@ function CoverPage({ page }: { page: PaperPageType }): JSX.Element {
       <p className="paper-kicker">{page.language === "zh" ? "工作论文" : "Working Paper"}</p>
       <h1>{page.title}</h1>
       <p className="author-line">
-        wyysteelhead
+        {paperAuthorName(page)}
       </p>
       <div className="cover-meta">
         <span>{page.language === "zh" ? "预印本" : "Preprint"}</span>
@@ -58,6 +58,40 @@ function CoverPage({ page }: { page: PaperPageType }): JSX.Element {
       </div>
     </section>
   );
+}
+
+function paperAuthorName(page: PaperPageType): string {
+  const zhAuthors = [
+    "林知远",
+    "陈砚秋",
+    "周维宁",
+    "许清和",
+    "沈若川",
+    "顾南舟",
+    "陆景明",
+    "韩闻溪"
+  ];
+  const enAuthors = [
+    "Elena Marlow",
+    "Julian Cross",
+    "Nora Vale",
+    "Adrian Finch",
+    "Mira Sato",
+    "Samuel Reed",
+    "Clara Wynn",
+    "Theo Morgan"
+  ];
+  const authors = page.language === "zh" ? zhAuthors : enAuthors;
+  return authors[stableHash(`${page.title ?? ""}:${page.id}`) % authors.length];
+}
+
+function stableHash(input: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
 }
 
 function AbstractPage({ page }: { page: PaperPageType }): JSX.Element {
