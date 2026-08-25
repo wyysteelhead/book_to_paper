@@ -37,6 +37,18 @@ macOS 用户下载 `.dmg`，Windows 用户下载 `.exe`。
 
 GitHub 页面里自带的 `Source code.zip` / `Source code.tar.gz` 是源码包，不是安装包。请下载 Assets 区域里的 `.dmg` 或 `.exe` 文件。
 
+### macOS 提示“已损坏”怎么办？
+
+当前版本暂未做 Apple Developer ID 签名和公证，macOS 可能会提示应用“已损坏”或“无法打开”。这通常不是文件真的坏了，而是 Gatekeeper 拦截了未公证应用。
+
+如果你已经把应用拖到 `Applications`，可以在终端执行：
+
+```bash
+xattr -cr /Applications/Document\ Lab.app
+```
+
+然后重新打开应用即可。
+
 ## 使用方法
 
 1. 下载并安装对应系统的安装包。
@@ -53,4 +65,3 @@ GitHub 页面里自带的 `Source code.zip` / `Source code.tar.gz` 是源码包�
 如果你因为使用本工具被领导、同事、导师、甲方、家属或任何路过工位的人发现，或者因为使用过度导致工作延期、学习停滞、DDL 爆炸，本项目概不负责。
 
 请适度使用。论文是假的，等待是真的，生活还是要继续的。
-
