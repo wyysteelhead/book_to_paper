@@ -1,25 +1,28 @@
-# Document Lab Release
+# Document Lab v0.1.1
 
-Document Lab is a local-first desktop reader that turns EPUB and TXT books into paper-style documents with dense academic layouts, generated figures, and optional real text statistics.
+Document Lab 是一个本地优先的桌面阅读器，可以把 EPUB 和 TXT 书籍转换成论文风格的阅读界面，适合在工作屏幕上更安静地阅读。
 
-## Highlights
+## 本次更新
 
-- Import EPUB/TXT files locally.
-- Render books as single-column reports or double-column conference-style papers.
-- Generate varied academic charts, tables, flow diagrams, graphs, matrices, and statistical figures.
-- Configure chart frequency, typography, real-statistics timeout, and per-document redaction terms.
-- Export the rendered document as PDF.
-- Use a neutral book icon and compact reader toolbar for a quieter working-screen appearance.
+- 重构分页逻辑：改为先安排图表位置，再按剩余空间填充正文，减少溢出、空白和图表丢失问题。
+- 优化图表频率：密集、偏多、标准、低频模式的图表数量差异更明显，并加入稳定随机分布。
+- 新增分页异常修复入口：在异常页面右键，可从当前页开始重新分页。
+- 修复重分页后的书签映射，避免书签跳转到错误页。
+- 优化长文阅读性能，减少滚动卡顿和缓存写入压力。
+- 修复导入后首页偶发不刷新的问题。
+- 阅读器顶部栏支持滚动自动隐藏，鼠标移到顶部可重新显示。
+- 封面论文作者名改为随机生成，不再使用固定用户名。
+- 修复异常缓存中章节标题过密的问题。
 
-## Installers
+## 安装包
 
-This release includes platform-specific builds when generated through GitHub Actions:
+通过 GitHub Actions 构建时，本版本会生成：
 
-- macOS: `.dmg`
-- Windows: `.exe` NSIS installer
+- macOS：`.dmg`
+- Windows：`.exe` NSIS 安装包
 
-## Notes
+## 说明
 
-- All book parsing and rendering happens locally.
-- The Windows installer is produced on the Windows GitHub Actions runner. Building Windows packages from macOS is not the recommended release path.
-- The macOS build is unsigned by default unless Apple signing secrets are added to the repository.
+- 书籍解析和渲染都在本地完成。
+- Windows 安装包由 Windows GitHub Actions runner 生成。
+- macOS 构建默认未签名，除非仓库中配置了 Apple 签名密钥。
