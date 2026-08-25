@@ -40,6 +40,7 @@ export function ChartTemplatePreview(): JSX.Element {
   const [seeds, setSeeds] = useState<Record<string, number>>(
     () => Object.fromEntries(chartTypes.map((item, index) => [item.type, 7 + index * 11]))
   );
+  const [customPreviewVersions, setCustomPreviewVersions] = useState<Record<string, number>>({});
   const [codePanel, setCodePanel] = useState<{
     title: string;
     code: string;
@@ -131,7 +132,7 @@ export function ChartTemplatePreview(): JSX.Element {
           </button>
           <button
             className="icon-text-button"
-            onClick={() =>
+            onClick={() => {
               setSeeds((current) =>
                 Object.fromEntries(
                   chartTypes.map((item, index) => [
@@ -139,8 +140,16 @@ export function ChartTemplatePreview(): JSX.Element {
                     (current[item.type] ?? 7 + index * 11) + 1
                   ])
                 )
-              )
-            }
+              );
+              setCustomPreviewVersions((current) =>
+                Object.fromEntries(
+                  customChartTemplates.map((template) => [
+                    template.id,
+                    (current[template.id] ?? 0) + 1
+                  ])
+                )
+              );
+            }}
           >
             <RefreshCw size={16} />
             全部刷新
@@ -175,6 +184,19 @@ export function ChartTemplatePreview(): JSX.Element {
                     <Pencil size={14} />
                   </button>
                   <button
+                    className="icon-button subtle"
+                    onClick={() =>
+                      setCustomPreviewVersions((current) => ({
+                        ...current,
+                        [template.id]: (current[template.id] ?? 0) + 1
+                      }))
+                    }
+                    aria-label={`刷新${template.name}`}
+                    title="刷新预览"
+                  >
+                    <RefreshCw size={14} />
+                  </button>
+                  <button
                     className="icon-button subtle danger"
                     onClick={() => deleteCustomTemplate(template)}
                     aria-label={`删除${template.name}`}
@@ -185,7 +207,10 @@ export function ChartTemplatePreview(): JSX.Element {
                 </div>
               </header>
               <div className="figure-block">
-                <ChartRenderer figure={template.figure} />
+                <ChartRenderer
+                  key={`${template.id}-${customPreviewVersions[template.id] ?? 0}`}
+                  figure={template.figure}
+                />
                 <p className="caption">{template.figure.caption}</p>
               </div>
             </article>

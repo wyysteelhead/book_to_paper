@@ -1190,6 +1190,12 @@ p {
   background: rgba(255, 254, 250, 0.42);
 }
 
+.paper-stack-spacer {
+  width: 816px;
+  min-height: 0;
+  pointer-events: none;
+}
+
 .role-text .paper-section {
   height: 900px;
   overflow: hidden;

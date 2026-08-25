@@ -236,19 +236,20 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         enabledChartTypes: enabledChartTypeList(get().enabledChartTypes),
         customChartTemplates: enabledCustomChartTemplates(get().customChartTemplates)
       });
-      setProgress(`已生成 ${document.pages.length} 页，正在打开阅读视图...`, 96);
+      const importedDocument = makeImportedDocumentInstance(document);
+      setProgress(`已生成 ${importedDocument.pages.length} 页，正在打开阅读视图...`, 96);
       await yieldToUi();
 
       set((state) => ({
-        documents: [document, ...state.documents],
-        activeDocument: document,
-        sourceBooks: { ...state.sourceBooks, [document.bookId]: parsed },
-        documentRedactions: { ...state.documentRedactions, [document.bookId]: state.pendingRedactionInput },
+        documents: [importedDocument, ...state.documents],
+        activeDocument: importedDocument,
+        sourceBooks: { ...state.sourceBooks, [importedDocument.bookId]: parsed },
+        documentRedactions: { ...state.documentRedactions, [importedDocument.bookId]: state.pendingRedactionInput },
         isImporting: false,
         importStatus: null,
         importError: null
       }));
-      await persistLibraryCache(libraryCacheFromState(get()));
+      await persistLibraryCacheNow(libraryCacheFromState(get()));
     } catch (error) {
       set({
         isImporting: false,
@@ -279,22 +280,22 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         Object.entries(state.readingBookmarks).filter(([id]) => id !== documentId)
       )
     }));
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   closeDocument: () => set({ activeDocument: null }),
   setTemplateId: (templateId) => {
     set({ templateId });
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   setUseRealStats: (value) => set({ useRealStats: value }),
   setStatsTimeoutMs: (value) => set({ statsTimeoutMs: value }),
   setFigureFrequency: (value) => {
     set({ figureFrequency: value });
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   setHidePageHeader: (value) => {
     set({ hidePageHeader: value });
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   setChartTypeEnabled: (type, enabled) => {
     set((state) => ({
@@ -303,15 +304,15 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         [type]: enabled
       }
     }));
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   setPaperTitleTemplatesInput: (value) => {
     set({ paperTitleTemplatesInput: value });
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   setSectionTitleTemplatesInput: (value) => {
     set({ sectionTitleTemplatesInput: value });
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   setTypography: (settings) =>
     set((state) => ({
@@ -340,13 +341,22 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       };
     }),
   saveReadingPosition: (documentId, position) => {
+    const previous = get().readingPositions[documentId];
+    if (
+      previous &&
+      previous.pageIndex === position.pageIndex &&
+      Math.abs(previous.scrollTop - position.scrollTop) < 240 &&
+      position.updatedAt - previous.updatedAt < 4000
+    ) {
+      return;
+    }
     set((state) => ({
       readingPositions: {
         ...state.readingPositions,
         [documentId]: position
       }
     }));
-    void persistLibraryCache(libraryCacheFromState(get()));
+    scheduleLibraryCachePersist(libraryCacheFromState(get()));
   },
   addReadingBookmark: (documentId, bookmark) => {
     set((state) => ({
@@ -360,7 +370,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         ].slice(0, 40)
       }
     }));
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   removeReadingBookmark: (documentId, bookmarkId) => {
     set((state) => ({
@@ -369,7 +379,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         [documentId]: (state.readingBookmarks[documentId] ?? []).filter((bookmark) => bookmark.id !== bookmarkId)
       }
     }));
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   saveCustomChartTemplate: (template) => {
     set((state) => ({
@@ -378,7 +388,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         ...state.customChartTemplates.filter((existing) => existing.id !== template.id)
       ].slice(0, 80)
     }));
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   setCustomChartTemplateEnabled: (templateId, enabled) => {
     set((state) => ({
@@ -386,13 +396,13 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         template.id === templateId ? { ...template, enabled, updatedAt: Date.now() } : template
       )
     }));
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   removeCustomChartTemplate: (templateId) => {
     set((state) => ({
       customChartTemplates: state.customChartTemplates.filter((template) => template.id !== templateId)
     }));
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   saveDocumentLayoutCache: (documentId, layoutCache) => {
     set((state) => ({
@@ -404,7 +414,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         document.id === documentId ? { ...document, layoutCache } : document
       )
     }));
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   },
   refreshDocumentCharts: async (documentId) => {
     const target = get().documents.find((document) => document.id === documentId);
@@ -441,13 +451,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         enabledChartTypes: enabledChartTypeList(get().enabledChartTypes),
         customChartTemplates: enabledCustomChartTemplates(get().customChartTemplates)
       });
+      const refreshedDocument = {
+        ...refreshed,
+        id: target.id,
+        createdAt: target.createdAt
+      };
       set((state) => ({
-        activeDocument: state.activeDocument?.id === target.id ? refreshed : state.activeDocument,
-        documents: state.documents.map((document) => (document.id === target.id ? refreshed : document)),
+        activeDocument: state.activeDocument?.id === target.id ? refreshedDocument : state.activeDocument,
+        documents: state.documents.map((document) => (document.id === target.id ? refreshedDocument : document)),
         isImporting: false,
         importStatus: null
       }));
-      await persistLibraryCache(libraryCacheFromState(get()));
+      await persistLibraryCacheNow(libraryCacheFromState(get()));
     } catch (error) {
       set({
         isImporting: false,
@@ -489,15 +504,20 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         enabledChartTypes: enabledChartTypeList(state.enabledChartTypes),
         customChartTemplates: enabledCustomChartTemplates(state.customChartTemplates)
       });
+      const regeneratedDocument = {
+        ...regenerated,
+        id: active.id,
+        createdAt: active.createdAt
+      };
       return {
         templateId,
-        activeDocument: regenerated,
+        activeDocument: regeneratedDocument,
         documents: state.documents.map((document) =>
-          document.id === active.id ? regenerated : document
+          document.id === active.id ? regeneratedDocument : document
         )
       };
     });
-    void persistLibraryCache(libraryCacheFromState(get()));
+    void persistLibraryCacheNow(libraryCacheFromState(get()));
   }
 }));
 
@@ -516,6 +536,8 @@ type PersistableState = {
   templateId: PaperTemplateId;
 };
 
+let scheduledPersistTimer: number | null = null;
+
 function libraryCacheFromState(state: LibraryState): PersistableState {
   return {
     documents: state.documents,
@@ -531,6 +553,29 @@ function libraryCacheFromState(state: LibraryState): PersistableState {
     enabledChartTypes: state.enabledChartTypes,
     templateId: state.templateId
   };
+}
+
+function makeImportedDocumentInstance(document: PaperDocument): PaperDocument {
+  return {
+    ...document,
+    id: `${document.id}-${Date.now().toString(36)}`
+  };
+}
+
+async function persistLibraryCacheNow(state: PersistableState): Promise<void> {
+  if (scheduledPersistTimer) {
+    window.clearTimeout(scheduledPersistTimer);
+    scheduledPersistTimer = null;
+  }
+  await persistLibraryCache(state);
+}
+
+function scheduleLibraryCachePersist(state: PersistableState): void {
+  if (scheduledPersistTimer) window.clearTimeout(scheduledPersistTimer);
+  scheduledPersistTimer = window.setTimeout(() => {
+    scheduledPersistTimer = null;
+    void persistLibraryCache(state);
+  }, 1800);
 }
 
 async function persistLibraryCache(state: PersistableState): Promise<void> {

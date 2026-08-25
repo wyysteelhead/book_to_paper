@@ -29,6 +29,7 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [renderAllPages, setRenderAllPages] = useState(false);
   const lastSavedPositionAt = useRef(0);
+  const currentPageIndexRef = useRef(0);
   const hasRestoredInitialPosition = useRef(false);
   const paperStackRef = useRef<HTMLDivElement | null>(null);
   const figureMeasureRef = useRef<HTMLDivElement | null>(null);
@@ -53,6 +54,16 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
   const visibleDocument = layoutDocument;
   const bookmarks = readingBookmarks[visibleDocument.id] ?? [];
   const currentPageBookmark = bookmarks.find((bookmark) => bookmark.pageIndex === currentPageIndex) ?? null;
+  const renderedPageStart = renderAllPages ? 0 : Math.max(0, currentPageIndex - PAGE_RENDER_BUFFER);
+  const renderedPageEnd = renderAllPages
+    ? visibleDocument.pages.length
+    : Math.min(visibleDocument.pages.length, currentPageIndex + PAGE_RENDER_BUFFER + 1);
+  const renderedPages = visibleDocument.pages.slice(renderedPageStart, renderedPageEnd);
+  const topSpacerHeight = renderedPageStart > 0 ? renderedPageStart * PAGE_STEP - 28 : 0;
+  const bottomSpacerPageCount = Math.max(0, visibleDocument.pages.length - renderedPageEnd);
+  const bottomSpacerHeight = bottomSpacerPageCount > 0 ? bottomSpacerPageCount * PAGE_STEP - 28 : 0;
+
+  currentPageIndexRef.current = currentPageIndex;
 
   const openBookmarks = (): void => {
     if (bookmarkCloseTimer.current) {
@@ -93,7 +104,9 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
         });
       }
     }
-    setCurrentPageIndex(readingPositions[document.id]?.pageIndex ?? 0);
+    const restoredIndex = readingPositions[document.id]?.pageIndex ?? 0;
+    currentPageIndexRef.current = restoredIndex;
+    setCurrentPageIndex(restoredIndex);
   }, [document]);
 
   useLayoutEffect(() => {
@@ -169,7 +182,10 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
           Math.round((window.scrollY - absoluteStackTop + window.innerHeight * 0.45) / PAGE_STEP)
         )
       );
-      setCurrentPageIndex(nextIndex);
+      if (nextIndex !== currentPageIndexRef.current) {
+        currentPageIndexRef.current = nextIndex;
+        setCurrentPageIndex(nextIndex);
+      }
       if (Date.now() - lastSavedPositionAt.current > 1200) {
         lastSavedPositionAt.current = Date.now();
         saveReadingPosition(visibleDocument.id, {
@@ -253,6 +269,7 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
   const scrollToPageIndex = (pageIndex: number): void => {
     const page = visibleDocument.pages[pageIndex];
     if (!page) return;
+    currentPageIndexRef.current = pageIndex;
     setCurrentPageIndex(pageIndex);
     window.requestAnimationFrame(() => {
       const node = window.document.querySelector<HTMLElement>(`[data-page-id="${page.id}"]`);
@@ -265,9 +282,6 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
       window.scrollTo({ top: absoluteStackTop + pageIndex * PAGE_STEP, behavior: "smooth" });
     });
   };
-
-  const shouldRenderPage = (pageIndex: number): boolean =>
-    renderAllPages || Math.abs(pageIndex - currentPageIndex) <= PAGE_RENDER_BUFFER;
 
   return (
     <section className="reader-view">
@@ -357,25 +371,21 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
       {isMeasuringFigures ? <LayoutProgress /> : null}
 
       <div className={`paper-stack ${isMeasuringFigures ? "layout-measuring" : ""}`} ref={paperStackRef}>
-        {visibleDocument.pages.map((page) => (
-          shouldRenderPage(page.index) ? (
-            <PaperPage
-              key={page.id}
-              page={page}
-              documentTitle={visibleDocument.title}
-              hidePageHeader={hidePageHeader}
-              figureHeights={figureHeights}
-            />
-          ) : (
-            <div
-              key={page.id}
-              className="paper-page paper-page-placeholder"
-              data-page-id={page.id}
-              data-page-index={page.index}
-              aria-label={`Page ${page.index + 1}`}
-            />
-          )
+        {topSpacerHeight > 0 ? (
+          <div className="paper-stack-spacer" style={{ height: topSpacerHeight }} aria-hidden="true" />
+        ) : null}
+        {renderedPages.map((page) => (
+          <PaperPage
+            key={page.id}
+            page={page}
+            documentTitle={visibleDocument.title}
+            hidePageHeader={hidePageHeader}
+            figureHeights={figureHeights}
+          />
         ))}
+        {bottomSpacerHeight > 0 ? (
+          <div className="paper-stack-spacer" style={{ height: bottomSpacerHeight }} aria-hidden="true" />
+        ) : null}
       </div>
 
       <ChartMeasureHost documentData={visibleDocument} measureRef={figureMeasureRef} />
