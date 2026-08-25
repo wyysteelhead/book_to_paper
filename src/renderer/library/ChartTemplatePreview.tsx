@@ -1,6 +1,6 @@
-import { Check, Code2, Copy, Plus, RefreshCw, X } from "lucide-react";
+import { Check, Clipboard, Copy, ExternalLink, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { useState } from "react";
-import type { PaperFigure } from "../../common/types";
+import type { CustomChartTemplate, PaperFigure } from "../../common/types";
 import { ChartRenderer } from "../reader/charts/ChartRenderer";
 import { useLibraryStore } from "./libraryStore";
 
@@ -26,23 +26,84 @@ const chartTypes: Array<{
   { type: "flow", label: "流程图" },
   { type: "multi_panel", label: "多面板图" },
   { type: "plain_table", label: "单纯表格" },
-  { type: "formula", label: "公式" }
+  { type: "formula", label: "公式" },
+  { type: "custom", label: "自定义内容" }
 ];
 
 export function ChartTemplatePreview(): JSX.Element {
   const enabledChartTypes = useLibraryStore((state) => state.enabledChartTypes);
   const setChartTypeEnabled = useLibraryStore((state) => state.setChartTypeEnabled);
+  const customChartTemplates = useLibraryStore((state) => state.customChartTemplates);
+  const saveCustomChartTemplate = useLibraryStore((state) => state.saveCustomChartTemplate);
+  const setCustomChartTemplateEnabled = useLibraryStore((state) => state.setCustomChartTemplateEnabled);
+  const removeCustomChartTemplate = useLibraryStore((state) => state.removeCustomChartTemplate);
   const [seeds, setSeeds] = useState<Record<string, number>>(
     () => Object.fromEntries(chartTypes.map((item, index) => [item.type, 7 + index * 11]))
   );
-  const [codePanel, setCodePanel] = useState<{ title: string; code: string; prompt: string } | null>(null);
+  const [codePanel, setCodePanel] = useState<{
+    title: string;
+    code: string;
+  } | null>(null);
+  const [newTemplatePanel, setNewTemplatePanel] = useState<{
+    name: string;
+    tab: "prompt" | "model" | "paste";
+    json: string;
+    prompt: string;
+    error: string | null;
+  } | null>(null);
   const [copied, setCopied] = useState(false);
 
-  async function copyCurrentCode(kind: "code" | "prompt" = "code") {
+  async function copyCurrentCode() {
     if (!codePanel) return;
-    await navigator.clipboard.writeText(kind === "code" ? codePanel.code : codePanel.prompt);
+    await navigator.clipboard.writeText(codePanel.code);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1200);
+  }
+
+  async function copyNewTemplatePrompt() {
+    if (!newTemplatePanel) return;
+    await navigator.clipboard.writeText(newTemplatePanel.prompt);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  }
+
+  async function pasteNewTemplateDefinition() {
+    if (!newTemplatePanel) return;
+    const text = await navigator.clipboard.readText();
+    setNewTemplatePanel({ ...newTemplatePanel, json: text, error: null });
+  }
+
+  function saveNewTemplate() {
+    if (!newTemplatePanel) return;
+    if (!newTemplatePanel.json.trim()) {
+      setNewTemplatePanel({ ...newTemplatePanel, error: "请先把完整 JSON 模板定义粘贴到下面的输入框。" });
+      return;
+    }
+    const parsed = parseTemplateInput(newTemplatePanel.json);
+    if (!parsed.ok) {
+      setNewTemplatePanel({ ...newTemplatePanel, error: parsed.error });
+      return;
+    }
+
+    const now = Date.now();
+    const id = parsed.figure.id || `custom-${now}`;
+    saveCustomChartTemplate({
+      id,
+      name: newTemplatePanel.name.trim() || parsed.figure.title || "未命名模板",
+      enabled: true,
+      figure: {
+        ...parsed.figure,
+        id
+      },
+      createdAt: now,
+      updatedAt: now
+    });
+    setNewTemplatePanel(null);
+  }
+
+  function deleteCustomTemplate(template: CustomChartTemplate) {
+    if (!window.confirm(`删除自定义模板「${template.name}」？`)) return;
+    removeCustomChartTemplate(template.id);
   }
 
   return (
@@ -55,7 +116,15 @@ export function ChartTemplatePreview(): JSX.Element {
         <div className="chart-preview-actions">
           <button
             className="icon-text-button"
-            onClick={() => setCodePanel({ title: "新增图表模板", code: newTemplateCode(), prompt: templatePromptFor("bar") })}
+            onClick={() => {
+              setNewTemplatePanel({
+                name: "",
+                tab: "paste",
+                json: "",
+                prompt: templatePromptFor(),
+                error: null
+              });
+            }}
           >
             <Plus size={16} />
             新增
@@ -78,6 +147,51 @@ export function ChartTemplatePreview(): JSX.Element {
           </button>
         </div>
       </header>
+      {customChartTemplates.length > 0 ? (
+        <div className="custom-template-strip" aria-label="自定义图表模板">
+          {customChartTemplates.map((template) => (
+            <article className="chart-gallery-card custom-template-card" key={template.id}>
+              <header>
+                <label className="chart-enable-toggle" title={template.enabled !== false ? "已启用" : "已停用"}>
+                  <input
+                    type="checkbox"
+                    checked={template.enabled !== false}
+                    onChange={(event) => setCustomChartTemplateEnabled(template.id, event.currentTarget.checked)}
+                  />
+                  <h3>{template.name}</h3>
+                </label>
+                <div className="chart-card-actions">
+                  <button
+                    className="icon-button subtle"
+                    onClick={() =>
+                      setCodePanel({
+                        title: `${template.name}定义`,
+                        code: `export const template = ${JSON.stringify(template.figure, null, 2)};\n`
+                      })
+                    }
+                    aria-label={`编辑${template.name}定义`}
+                    title="编辑定义"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    className="icon-button subtle danger"
+                    onClick={() => deleteCustomTemplate(template)}
+                    aria-label={`删除${template.name}`}
+                    title="删除模板"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </header>
+              <div className="figure-block">
+                <ChartRenderer figure={template.figure} />
+                <p className="caption">{template.figure.caption}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : null}
       <div className="chart-gallery" aria-label="图表模板 Gallery">
         {chartTypes.map((item, index) => (
           <article className="chart-gallery-card" key={item.type}>
@@ -93,17 +207,16 @@ export function ChartTemplatePreview(): JSX.Element {
               <div className="chart-card-actions">
                 <button
                   className="icon-button subtle"
-                  onClick={() =>
+                  onClick={() => {
                     setCodePanel({
                       title: `${item.label}定义`,
-                      code: templateCodeFor(item.type, seeds[item.type] ?? 7 + index * 11),
-                      prompt: templatePromptFor(item.type)
-                    })
-                  }
-                  aria-label={`编辑${item.label}代码`}
-                  title="编辑代码"
+                      code: templateCodeFor(item.type, seeds[item.type] ?? 7 + index * 11)
+                    });
+                  }}
+                  aria-label={`编辑${item.label}定义`}
+                  title="编辑定义"
                 >
-                  <Code2 size={14} />
+                  <Pencil size={14} />
                 </button>
                 <button
                   className="icon-button subtle"
@@ -139,9 +252,14 @@ export function ChartTemplatePreview(): JSX.Element {
                 <X size={18} />
               </button>
             </header>
+            <p className="template-prompt-help">
+              这里是当前图表模板的 JSON 定义。
+            </p>
             <textarea
               value={codePanel.code}
-              onChange={(event) => setCodePanel({ ...codePanel, code: event.currentTarget.value })}
+              onChange={(event) =>
+                setCodePanel({ ...codePanel, code: event.currentTarget.value })
+              }
               spellCheck={false}
             />
             <footer>
@@ -149,13 +267,122 @@ export function ChartTemplatePreview(): JSX.Element {
                 关闭
               </button>
               <div className="template-copy-actions">
-                <button className="secondary-button" onClick={() => copyCurrentCode("prompt")}>
-                  <Copy size={16} />
-                  复制提示词
-                </button>
-                <button className="primary-button" onClick={() => copyCurrentCode("code")}>
+                <button className="primary-button" onClick={copyCurrentCode}>
                   {copied ? <Check size={16} /> : <Copy size={16} />}
                   {copied ? "已复制" : "复制定义"}
+                </button>
+              </div>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+      {newTemplatePanel ? (
+        <div className="import-overlay" role="presentation" onMouseDown={() => setNewTemplatePanel(null)}>
+          <section className="template-code-panel new-template-panel" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <header className="new-template-header">
+              <div>
+                <p className="eyebrow">New Template</p>
+                <h2>新建图表模板</h2>
+              </div>
+              <button className="icon-button subtle" onClick={() => setNewTemplatePanel(null)}>
+                <X size={18} />
+              </button>
+            </header>
+            <label className="template-name-field">
+              <span>模板名称</span>
+              <input
+                value={newTemplatePanel.name}
+                onChange={(event) => setNewTemplatePanel({ ...newTemplatePanel, name: event.currentTarget.value, error: null })}
+                placeholder="先给这个模板起个名字"
+              />
+            </label>
+            <div className="new-template-tabs" role="tablist" aria-label="新建模板步骤">
+              <button
+                className={newTemplatePanel.tab === "prompt" ? "active" : ""}
+                onClick={() => setNewTemplatePanel({ ...newTemplatePanel, tab: "prompt", error: null })}
+                type="button"
+              >
+                1 复制提示词
+              </button>
+              <button
+                className={newTemplatePanel.tab === "model" ? "active" : ""}
+                onClick={() => setNewTemplatePanel({ ...newTemplatePanel, tab: "model", error: null })}
+                type="button"
+              >
+                2 打开大模型
+              </button>
+              <button
+                className={newTemplatePanel.tab === "paste" ? "active" : ""}
+                onClick={() => setNewTemplatePanel({ ...newTemplatePanel, tab: "paste", error: null })}
+                type="button"
+              >
+                3 粘贴结果
+              </button>
+            </div>
+            <div className="new-template-tab-body">
+              {newTemplatePanel.tab === "prompt" ? (
+                <div className="new-template-step">
+                  <div className="new-template-editor-head">
+                    <strong>复制这段提示词</strong>
+                    <div className="template-copy-actions">
+                      <button className="primary-button compact-action" onClick={copyNewTemplatePrompt}>
+                        {copied ? <Check size={16} /> : <Copy size={16} />}
+                        {copied ? "已复制" : "复制提示词"}
+                      </button>
+                    </div>
+                  </div>
+                  <textarea value={newTemplatePanel.prompt} readOnly spellCheck={false} />
+                </div>
+              ) : null}
+              {newTemplatePanel.tab === "model" ? (
+                <div className="new-template-step model-instructions">
+                  <h3>去大模型网站生成完整回复</h3>
+                  <p>
+                    打开 DeepSeek、Kimi 或其他大模型网站，把上一步复制的提示词粘贴进去。模型会返回两段代码块：第一段是 JSON 元信息，第二段是 HTML/SVG 渲染内容。
+                  </p>
+                  <div className="model-site-buttons">
+                    <a className="primary-button" href="https://chat.deepseek.com" target="_blank" rel="noreferrer">
+                      打开 DeepSeek
+                      <ExternalLink size={15} />
+                    </a>
+                    <a className="secondary-button" href="https://www.kimi.com" target="_blank" rel="noreferrer">
+                      打开 Kimi
+                      <ExternalLink size={15} />
+                    </a>
+                  </div>
+                  <p>
+                    模型生成完成后，不要手动框选网页里显示出来的代码。请直接点击网页端模型回复自带的“复制”按钮，复制完整回复，然后切到“3 粘贴结果”。
+                  </p>
+                </div>
+              ) : null}
+              {newTemplatePanel.tab === "paste" ? (
+                <div className="new-template-step">
+                  <div className="new-template-editor-head">
+                    <strong>把模型的完整输出复制回来</strong>
+                    <button className="secondary-button compact-action" onClick={pasteNewTemplateDefinition}>
+                      <Clipboard size={16} />
+                      从剪贴板粘贴
+                    </button>
+                  </div>
+                  {newTemplatePanel.error ? <div className="inline-error">{newTemplatePanel.error}</div> : null}
+                  <textarea
+                    className="new-template-textarea"
+                    value={newTemplatePanel.json}
+                    onChange={(event) => setNewTemplatePanel({ ...newTemplatePanel, json: event.currentTarget.value, error: null })}
+                    placeholder="请粘贴网页 AI 回复的完整原文。推荐点击网页端回复自带的“复制”按钮，不要手动框选渲染后的代码。系统会自动提取第一段 ```json 和第二段 ```html / ```svg。"
+                    spellCheck={false}
+                  />
+                </div>
+              ) : null}
+            </div>
+            <footer>
+              <button className="secondary-button" onClick={() => setNewTemplatePanel(null)}>
+                关闭
+              </button>
+              <div className="template-copy-actions">
+                <button className="primary-button" onClick={saveNewTemplate}>
+                  <Plus size={16} />
+                  保存模板
                 </button>
               </div>
             </footer>
@@ -171,57 +398,163 @@ function templateCodeFor(type: PaperFigure["chartType"], seed: number): string {
   return `export const template = ${JSON.stringify(figure, null, 2)};\n`;
 }
 
-function newTemplateCode(): string {
-  return `export const template = {
-  id: "custom-template-id",
-  number: 0,
-  layout: "double_column_small",
-  title: "自定义图表标题",
-  caption: "图 0. 自定义图表说明。",
-  chartType: "bar",
-  data: {
-    kind: "series",
-    labels: ["A", "B", "C", "D"],
-    values: [24, 36, 18, 42]
-  },
-  workScoreBonus: 0.08
-};\n`;
+function parseTemplateInput(input: string): { ok: true; figure: PaperFigure } | { ok: false; error: string } {
+  try {
+    const extracted = extractTemplateSections(input);
+    const jsonText = extracted.jsonText
+      .replace(/^export\s+const\s+\w+\s*=\s*/u, "")
+      .replace(/;$/u, "")
+      .trim();
+    const parsed = JSON.parse(jsonText) as Partial<PaperFigure>;
+    if (!parsed || typeof parsed !== "object") return { ok: false, error: "JSON 必须是一个对象。" };
+    if (!parsed.title) return { ok: false, error: "缺少 title。" };
+    if (!parsed.caption) return { ok: false, error: "缺少 caption。" };
+    const customRenderer = extracted.code
+      ? { language: "html" as const, code: extracted.code }
+      : parsed.customRenderer;
+    const chartType = parsed.chartType ?? (customRenderer ? "custom" : undefined);
+    if (!chartType) return { ok: false, error: "缺少 chartType，或者提供第二段 HTML/SVG 代码。" };
+    return {
+      ok: true,
+      figure: {
+        id: parsed.id ?? `custom-${Date.now()}`,
+        number: parsed.number ?? 0,
+        layout: parsed.layout ?? "double_column_small",
+        title: parsed.title,
+        caption: parsed.caption,
+        chartType,
+        data: parsed.data ?? (customRenderer ? { kind: "custom", props: {} } : undefined),
+        customRenderer,
+        workScoreBonus: parsed.workScoreBonus ?? 0.08
+      }
+    };
+  } catch {
+    return { ok: false, error: "JSON 解析失败，请确认内容是完整 JSON 对象。" };
+  }
 }
 
-function templatePromptFor(type: PaperFigure["chartType"]): string {
-  return `请根据下面的 Book2Paper 图表模板格式，帮我生成一个新的 ${type} 图表 JSON。要求：
-1. 只输出 JSON 对象，不要 Markdown 代码块。
-2. chartType 必须是 "${type}"，layout 只能根据图表信息量选择 "double_column_small" 或 "double_span_figure"；如果是公式，必须用 "double_column_small"。
-3. title 要像论文图表标题，caption 要像正式论文图注。
-4. data.kind 必须与 chartType 匹配：
-   - bar/line/area/heatmap/radar/multi_panel: {"kind":"series","labels":[],"values":[]}
-   - pie/word_cloud: {"kind":"ranked","labels":[],"values":[]}
-   - grouped_bar/stacked_bar: {"kind":"multi_series","labels":[],"series":[{"name":"","values":[]}]}
-   - matrix: {"kind":"matrix","labels":[],"values":[[]]}
-   - scatter: {"kind":"scatter","points":[{"x":0,"y":0,"label":"","size":1}]}
-   - gantt: {"kind":"gantt","tasks":[{"label":"","start":0,"end":10}]}
-   - candlestick: {"kind":"candlestick","labels":[],"values":[{"open":0,"high":1,"low":0,"close":1}]}
-   - graph/network: {"kind":"network","nodes":[],"links":[[0,1,1]]}
-   - sankey: {"kind":"sankey","nodes":[],"links":[{"source":0,"target":1,"value":1}]}
-   - flow: {"kind":"flow","nodes":[],"links":[[0,1]],"variant":"pipeline"}
-   - table/plain_table: {"kind":"table","headers":[],"rows":[[]]}
-   - formula: data 可以省略
-5. 请填充随机但看起来学术的数据，避免直接暴露真实书名或角色名。
+function extractTemplateSections(input: string): { jsonText: string; code?: string } {
+  const trimmed = input.trim();
+  const blocks = Array.from(trimmed.matchAll(/```(\w+)?\s*([\s\S]*?)```/gu)).map((match) => ({
+    language: (match[1] ?? "").toLowerCase(),
+    body: match[2].trim()
+  }));
+  const jsonBlock = blocks.find((block) => block.language === "json") ?? blocks[0];
+  const codeBlock = blocks.find((block) => ["html", "svg", "xml"].includes(block.language)) ?? blocks.find((block) => block !== jsonBlock);
+  if (jsonBlock) {
+    return {
+      jsonText: jsonBlock.body,
+      code: codeBlock?.body
+    };
+  }
+  return {
+    jsonText: trimmed
+      .replace(/^```(?:json|js|ts)?\s*/u, "")
+      .replace(/\s*```$/u, "")
+      .trim()
+  };
+}
 
-示例结构：
+function templatePromptFor(): string {
+  return `请根据下面的 Book2Paper 自定义论文组件格式，帮我生成一个新的模板。这个模板不一定是图表，也可以是英语单选题、术语卡片、流程说明、实验面板、复杂 SVG 图、公式推导或任何看起来像论文内容的组件。
+
+请先理解我的需求：
+- 组件主题：【例如：英语单选题 / 文本情绪波动 / 章节复杂度 / 人物关系密度 / 某个学科里的专业指标】
+- 组件用途：【例如：伪装成论文中的测试题 / 实验结果 / 展示章节对比 / 展示模型流程 / 展示统计摘要】
+- 内容结构：【例如：一个题干 + 四个选项；或一个 SVG 网络图；或一个 2x2 实验面板】
+- 视觉风格：【例如：低饱和学术风 / 红蓝对比 / 黑白灰 / 多色分组 / 更像自然科学论文】
+- 内容规模：【例如：1 道题 4 个选项 / 5 行 4 列 / 6 个节点 9 条边 / 3 个系列每个系列 6 项】
+- 额外限制：【例如：不要出现真实书名、人名、角色名；caption 要显得像正式论文；数值要随机但合理】
+
+输出要求：
+1. 输出两段 Markdown 代码块。
+2. 第一段必须是 \`\`\`json，保存模板元信息。chartType 可以直接写 "custom"，不要被已有图表类型限制。
+3. 第二段必须是 \`\`\`html，保存实际渲染内容。可以写 HTML + CSS + SVG，但不要写 script。
+4. HTML 内容会被放进固定尺寸的论文图表槽里，请使用 width:100%; height:100%; overflow:hidden; box-sizing:border-box。
+5. title 要像论文图表标题，caption 要像正式论文图注。
+6. 请填充随机但看起来学术的内容，避免直接暴露真实书名或角色名。
+
+第一段示例：
+\`\`\`json
 {
-  "id": "custom-template-id",
+  "id": "custom-english-mcq",
   "number": 0,
   "layout": "double_column_small",
-  "title": "局部信号稳健性摘要",
-  "caption": "图 0. 对重构文本窗口的局部指标进行归一化展示。",
-  "chartType": "${type}",
-  "data": null,
+  "title": "局部语义判别题",
+  "caption": "图 0. 以选择题格式呈现局部语义判别任务，用于模拟文本理解实验材料。",
+  "chartType": "custom",
+  "data": {
+    "kind": "custom",
+    "props": {
+      "type": "english_mcq"
+    }
+  },
   "workScoreBonus": 0.08
-}`;
+}
+\`\`\`
+
+第二段示例：
+\`\`\`html
+<style>
+  .mcq {
+    width: 100%;
+    height: 100%;
+    padding: 14px 16px;
+    overflow: hidden;
+    border: 1px solid #c9c1b4;
+    background: #fffefa;
+    font-family: Inter, "Times New Roman", serif;
+    color: #1f1f1d;
+  }
+  .mcq h4 { margin: 0 0 8px; font-size: 12px; }
+  .mcq p { margin: 0 0 10px; font-size: 11px; line-height: 1.35; }
+  .mcq ol { margin: 0; padding-left: 20px; display: grid; gap: 5px; font-size: 10px; }
+</style>
+<div class="mcq">
+  <h4>Semantic Discrimination Item</h4>
+  <p>Which option best preserves the causal relation implied by the source sentence?</p>
+  <ol type="A">
+    <li>The event follows from an external constraint.</li>
+    <li>The speaker denies the observed transition.</li>
+    <li>The sequence is unrelated to prior evidence.</li>
+    <li>The conclusion reverses the temporal order.</li>
+  </ol>
+</div>
+\`\`\``;
 }
 
 function previewFigure(type: PaperFigure["chartType"], seed: number): PaperFigure {
+  if (type === "custom") {
+    return {
+      id: `preview-${type}-${seed}`,
+      number: seed,
+      layout: "double_column_small",
+      title: "Preview",
+      caption: "图 0. 自定义内容模板预览。",
+      chartType: "custom",
+      data: { kind: "custom", props: { type: "english_mcq" } },
+      customRenderer: {
+        language: "html",
+        code: `<style>
+.mcq-preview{width:100%;height:100%;padding:14px 16px;overflow:hidden;border:1px solid #c9c1b4;background:#fffefa;font-family:Inter,"Times New Roman",serif;color:#1f1f1d}
+.mcq-preview h4{margin:0 0 8px;font-size:12px}
+.mcq-preview p{margin:0 0 9px;font-size:11px;line-height:1.35}
+.mcq-preview ol{margin:0;padding-left:20px;display:grid;gap:5px;font-size:10px}
+</style>
+<div class="mcq-preview">
+  <h4>Semantic Discrimination Item</h4>
+  <p>Which option best preserves the causal relation implied by the source sentence?</p>
+  <ol type="A">
+    <li>The event follows from an external constraint.</li>
+    <li>The speaker denies the observed transition.</li>
+    <li>The sequence is unrelated to prior evidence.</li>
+    <li>The conclusion reverses the temporal order.</li>
+  </ol>
+</div>`
+      },
+      workScoreBonus: 0
+    };
+  }
   return {
     id: `preview-${type}-${seed}`,
     number: seed,

@@ -1,4 +1,4 @@
-import type { ChartType, PaperDocument, PaperFigure, PaperPage } from "../../common/types";
+import type { ChartType, PaperColumn, PaperDocument, PaperFigure, PaperPage } from "../../common/types";
 
 type ParagraphItem = {
   marker?: string;
@@ -10,6 +10,14 @@ type TextPageDraft = {
   items: ParagraphItem[];
 };
 
+type FlowItem = ParagraphItem & {
+  language: PaperPage["language"];
+  sectionTitle?: string;
+  sourceChapterId?: string;
+  sourceProgress: number;
+  workScore: number;
+};
+
 type PageMeasurement = {
   blank: number;
   firstFragmentHeight: number;
@@ -17,16 +25,62 @@ type PageMeasurement = {
   overflow: number;
 };
 
+export type FigureHeightMap = Record<string, number>;
+
 const OVERFLOW_TOLERANCE = 8;
 const BLANK_PULL_THRESHOLD = 72;
 const FIT_PADDING = 24;
-const FILLER_THRESHOLD = 190;
+const FILLER_THRESHOLD = Number.POSITIVE_INFINITY;
 const MAX_FILLER_FIGURES_PER_PAGE = 2;
 const MAX_TOTAL_FIGURES_PER_PAGE = 4;
+const SAFE_SINGLE_HEIGHT = 760;
+const SAFE_DOUBLE_COLUMN_HEIGHT = 720;
+const SAFE_MIN_TEXT_SLICE = 34;
+const MIN_TEXT_WITH_SINGLE_FIGURE = 260;
+const MIN_TEXT_WITH_DOUBLE_FIGURE = 360;
+
+export function repaginateDocumentSafely(
+  documentData: PaperDocument,
+  options: { figureHeights?: FigureHeightMap } = {}
+): PaperDocument {
+  const sourcePages = withoutFormulaEstimatePage(documentData.pages);
+  const firstTextIndex = sourcePages.findIndex((page) => page.role === "text");
+  const lastTextIndex = findLastTextPageIndex(sourcePages);
+  if (firstTextIndex < 0 || lastTextIndex < firstTextIndex) return documentData;
+
+  const flow = flattenTextFlow(sourcePages.slice(firstTextIndex, lastTextIndex + 1));
+  if (flow.length === 0) return documentData;
+
+  const sourceTextPages = sourcePages.slice(firstTextIndex, lastTextIndex + 1);
+  const figurePool = collectSafeInlineFigures(sourceTextPages);
+  const placementInterval = inferFigurePlacementInterval(sourceTextPages, figurePool.length);
+  const prefix = sourcePages.slice(0, firstTextIndex);
+  const suffix = sourcePages.slice(lastTextIndex + 1);
+  const sourcePage =
+    sourcePages.find((page) => page.role === "text") ?? sourcePages[firstTextIndex];
+  const textPages =
+    sourcePage.templateId === "double-column-conference"
+      ? buildSafeDoublePages(flow, figurePool, sourcePage, placementInterval, options.figureHeights)
+      : buildSafeSinglePages(flow, figurePool, sourcePage, placementInterval, options.figureHeights);
+  const pages = [...prefix, ...textPages, ...suffix].map((page, index) => ({
+    ...page,
+    index
+  }));
+
+  return {
+    ...documentData,
+    pages,
+    chapterAnchors: rebuildChapterAnchors(documentData, pages)
+  };
+}
+
+function withoutFormulaEstimatePage(pages: PaperPage[]): PaperPage[] {
+  return pages.filter((page) => page.role !== "formula" && page.id !== "page-formula");
+}
 
 export function refineDocumentByMeasurements(
   documentData: PaperDocument,
-  options: { enabledChartTypes?: ChartType[] } = {}
+  options: { enabledChartTypes?: ChartType[]; focusPageIndex?: number } = {}
 ): PaperDocument | null {
   const pageDrafts = [...documentData.pages];
   const drafts = pageDrafts.map((page) =>
@@ -35,13 +89,16 @@ export function refineDocumentByMeasurements(
   const measurements = measureTextPages(pageDrafts);
   let changed = false;
 
-  for (let index = 0; index < pageDrafts.length; index += 1) {
+  const order = refinementOrder(pageDrafts.length, options.focusPageIndex);
+
+  for (const index of order) {
     const draft = drafts[index];
     const measurement = measurements.get(pageDrafts[index].id);
     if (!draft || !measurement) continue;
 
     if (measurement.overflow > OVERFLOW_TOLERANCE && draft.items.length > 0) {
-      if (measurement.overflow > 22 && removeLastFigure(draft)) {
+      const figureCount = countFigures(draft.page);
+      if ((measurement.overflow > 96 || figureCount > 2) && removeLastFigure(draft)) {
         changed = true;
         break;
       }
@@ -52,33 +109,38 @@ export function refineDocumentByMeasurements(
       changed = true;
       break;
     }
+  }
+
+  if (changed) {
+    const pages = rebuildPages(pageDrafts, drafts);
+    return {
+      ...documentData,
+      pages,
+      chapterAnchors: rebuildChapterAnchors(documentData, pages)
+    };
+  }
+
+  for (const index of order) {
+    const draft = drafts[index];
+    const measurement = measurements.get(pageDrafts[index].id);
+    if (!draft || !measurement) continue;
 
     if (measurement.blank > BLANK_PULL_THRESHOLD) {
       const nextIndex = findNextTextDraftIndex(drafts, index);
       const nextDraft = nextIndex >= 0 ? drafts[nextIndex] : null;
       const nextMeasurement = nextIndex >= 0 ? measurements.get(pageDrafts[nextIndex].id) : null;
-      const firstItem = nextDraft?.items[0];
-      if (nextDraft && firstItem && nextDraft.items.length > 1 && nextMeasurement) {
-        if (nextMeasurement.firstFragmentHeight + FIT_PADDING <= measurement.blank) {
-          draft.items.push(firstItem);
-          nextDraft.items.shift();
-          changed = true;
-          break;
-        }
-      }
-
-      if (nextDraft && firstItem && measurement.blank > 140) {
-        const split = splitLeadingItemForBlank(firstItem, measurement.blank, nextMeasurement?.firstFragmentHeight ?? 0);
-        if (split) {
-          draft.items.push(split.head);
-          nextDraft.items[0] = split.tail;
-          changed = true;
-          break;
-        }
+      if (nextDraft && pullForwardContentForBlank(draft, nextDraft, measurement, nextMeasurement ?? undefined)) {
+        changed = true;
+        break;
       }
     }
 
-    if (measurement.blank > FILLER_THRESHOLD && canAddFillerFigure(draft.page)) {
+    if (
+      measurement.blank > FILLER_THRESHOLD &&
+      measurement.overflow <= 0 &&
+      draftTextHeight(draft) >= MIN_TEXT_WITH_DOUBLE_FIGURE &&
+      canAddFillerFigure(draft.page)
+    ) {
       const nextPage = appendFillerFigure(draft.page, measurement.blank, options.enabledChartTypes);
       if (nextPage !== draft.page) {
         draft.page = nextPage;
@@ -98,6 +160,22 @@ export function refineDocumentByMeasurements(
   };
 }
 
+function refinementOrder(length: number, focusPageIndex: number | undefined): number[] {
+  if (focusPageIndex === undefined) {
+    return Array.from({ length }, (_, index) => index);
+  }
+
+  const focus = Math.max(0, Math.min(length - 1, focusPageIndex));
+  const order: number[] = [];
+  for (let offset = 0; offset < length; offset += 1) {
+    const forward = focus + offset;
+    const backward = focus - offset;
+    if (forward < length) order.push(forward);
+    if (offset > 0 && backward >= 0) order.push(backward);
+  }
+  return order;
+}
+
 function removeLastFigure(draft: TextPageDraft): boolean {
   const figures = draft.page.figures ?? (draft.page.figure ? [draft.page.figure] : []);
   if (figures.length === 0) return false;
@@ -112,6 +190,15 @@ function removeLastFigure(draft: TextPageDraft): boolean {
   return true;
 }
 
+function countFigures(page: PaperPage): number {
+  return page.figures?.length ?? (page.figure ? 1 : 0);
+}
+
+function draftTextHeight(draft: TextPageDraft): number {
+  const mode = draft.page.templateId === "double-column-conference" ? "double" : "single";
+  return draft.items.reduce((sum, item) => sum + estimateItemHeight(item, mode), 0);
+}
+
 function moveOverflowTail(
   draft: TextPageDraft,
   nextDraft: TextPageDraft,
@@ -120,13 +207,14 @@ function moveOverflowTail(
   const heights = measurement.fragmentHeights.length > 0 ? measurement.fragmentHeights : [measurement.firstFragmentHeight || 48];
   const moved: ParagraphItem[] = [];
   let removedHeight = 0;
+  const targetRemoval = measurement.overflow + FIT_PADDING + 48;
 
   for (let index = heights.length - 1; index >= 0; index -= 1) {
     const item = draft.items[index];
     if (!item) continue;
 
     const itemHeight = Math.max(heights[index] || measurement.firstFragmentHeight || 48, 24);
-    const requiredHeight = measurement.overflow + FIT_PADDING - removedHeight;
+    const requiredHeight = targetRemoval - removedHeight;
     const split = splitOverflowItem(item, requiredHeight, itemHeight);
 
     if (split) {
@@ -139,7 +227,7 @@ function moveOverflowTail(
     if (wholeItem) moved.unshift(wholeItem);
     removedHeight += itemHeight;
 
-    if (removedHeight >= measurement.overflow + FIT_PADDING || draft.items.length <= 1) break;
+    if (removedHeight >= targetRemoval || draft.items.length <= 1) break;
   }
 
   if (moved.length === 0 && draft.items.length > 1) {
@@ -194,6 +282,40 @@ function splitLeadingItemForBlank(
   };
 }
 
+function pullForwardContentForBlank(
+  draft: TextPageDraft,
+  nextDraft: TextPageDraft,
+  measurement: PageMeasurement,
+  nextMeasurement: PageMeasurement | undefined
+): boolean {
+  let changed = false;
+  let remainingBlank = measurement.blank - FIT_PADDING;
+  const mode = draft.page.templateId === "double-column-conference" ? "double" : "single";
+
+  while (nextDraft.items.length > 1 && remainingBlank > BLANK_PULL_THRESHOLD) {
+    const firstItem = nextDraft.items[0];
+    if (!firstItem) break;
+    const estimatedHeight = Math.max(estimateItemHeight(firstItem, mode), nextMeasurement?.firstFragmentHeight ?? 0, 24);
+    if (estimatedHeight + FIT_PADDING > remainingBlank) break;
+    draft.items.push(firstItem);
+    nextDraft.items.shift();
+    remainingBlank -= estimatedHeight;
+    changed = true;
+  }
+
+  const firstItem = nextDraft.items[0];
+  if (firstItem && remainingBlank > 140) {
+    const split = splitLeadingItemForBlank(firstItem, remainingBlank, nextMeasurement?.firstFragmentHeight ?? 0);
+    if (split) {
+      draft.items.push(split.head);
+      nextDraft.items[0] = split.tail;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
 function estimateFragmentHeight(text: string): number {
   const chineseChars = text.match(/[\u4e00-\u9fa5]/g)?.length ?? 0;
   const weightedLength = text.length + chineseChars * 0.4;
@@ -222,6 +344,354 @@ function findParagraphSplitIndex(text: string, targetIndex: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function findLastTextPageIndex(pages: PaperPage[]): number {
+  for (let index = pages.length - 1; index >= 0; index -= 1) {
+    if (pages[index].role === "text") return index;
+  }
+  return -1;
+}
+
+function flattenTextFlow(pages: PaperPage[]): FlowItem[] {
+  return pages.flatMap((page) => {
+    const markers = new Map(
+      (page.sectionMarkers ?? []).map((marker) => [marker.paragraphIndex, marker.title])
+    );
+    const sourceParagraphs = page.columns?.length
+      ? page.columns.flatMap((column) => column.paragraphs)
+      : (page.paragraphs ?? []);
+
+    return sourceParagraphs
+      .map((text, index): FlowItem | null => {
+        const trimmed = text.trim();
+        if (!trimmed) return null;
+        return {
+          marker: markers.get(index),
+          text: trimmed,
+          language: page.language,
+          sectionTitle: page.sectionTitle,
+          sourceChapterId: page.sourceChapterId,
+          sourceProgress: page.sourceProgress,
+          workScore: page.workScore
+        };
+      })
+      .filter((item): item is FlowItem => Boolean(item));
+  });
+}
+
+function collectSafeInlineFigures(pages: PaperPage[]): PaperFigure[] {
+  const figures = pages
+    .flatMap((page) => page.figures ?? (page.figure ? [page.figure] : []))
+    .filter((figure) => figure.chartType !== "formula");
+  const textPageCount = Math.max(1, pages.filter((page) => page.role === "text").length);
+  const maxInlineFigures = Math.max(4, Math.ceil(textPageCount * 0.38));
+  if (figures.length <= maxInlineFigures) return figures;
+
+  const step = figures.length / maxInlineFigures;
+  return Array.from({ length: maxInlineFigures }).map((_, index) => figures[Math.floor(index * step)]);
+}
+
+function inferFigurePlacementInterval(pages: PaperPage[], figureCount: number): number {
+  if (figureCount <= 0) return Number.POSITIVE_INFINITY;
+  const textPageCount = Math.max(1, pages.filter((page) => page.role === "text").length);
+  const sourceFigurePages = pages.filter((page) => (page.figures?.length ?? (page.figure ? 1 : 0)) > 0).length;
+  const pageDensity = sourceFigurePages / textPageCount;
+  const figureDensity = figureCount / textPageCount;
+  if (figureDensity >= 0.48 || pageDensity >= 0.7) return 2;
+  if (figureDensity >= 0.28 || pageDensity >= 0.34) return 3;
+  return 4;
+}
+
+function buildSafeSinglePages(
+  flow: FlowItem[],
+  figurePool: PaperFigure[],
+  sourcePage: PaperPage,
+  placementInterval: number,
+  figureHeights: FigureHeightMap | undefined
+): PaperPage[] {
+  const queue = [...flow];
+  const pages: PaperPage[] = [];
+  let figureCursor = 0;
+
+  while (queue.length > 0) {
+    let figure = shouldPlaceFigure(pages.length, figureCursor, figurePool, placementInterval)
+      ? normalizeFigureForTemplate(figurePool[figureCursor], sourcePage.templateId)
+      : null;
+    let textBudget = SAFE_SINGLE_HEIGHT - (figure ? figureSlotHeight(figure, "single", figureHeights) : 0);
+    if (figure && estimatedQueueTextHeight(queue, textBudget, "single") < MIN_TEXT_WITH_SINGLE_FIGURE) {
+      figure = null;
+      textBudget = SAFE_SINGLE_HEIGHT;
+    }
+    const items = takeItemsForBudget(queue, textBudget, "single");
+    if (items.length === 0) {
+      items.push(forceTakeOneItem(queue, "single"));
+    }
+    if (figure) figureCursor += 1;
+    pages.push(buildSafeTextPage(sourcePage, pages.length, items, undefined, figure ? [figure] : []));
+  }
+
+  return pages;
+}
+
+function buildSafeDoublePages(
+  flow: FlowItem[],
+  figurePool: PaperFigure[],
+  sourcePage: PaperPage,
+  placementInterval: number,
+  figureHeights: FigureHeightMap | undefined
+): PaperPage[] {
+  const queue = [...flow];
+  const pages: PaperPage[] = [];
+  let figureCursor = 0;
+
+  while (queue.length > 0) {
+    let figure = shouldPlaceFigure(pages.length, figureCursor, figurePool, placementInterval)
+      ? normalizeFigureForTemplate(figurePool[figureCursor], sourcePage.templateId)
+      : null;
+    const figurePlacement = figure && pages.length % 4 === 3 ? "right" : "left";
+    let leftBudget = SAFE_DOUBLE_COLUMN_HEIGHT - (figure && figurePlacement === "left" ? figureSlotHeight(figure, "double", figureHeights) : 0);
+    let rightBudget = SAFE_DOUBLE_COLUMN_HEIGHT - (figure && figurePlacement === "right" ? figureSlotHeight(figure, "double", figureHeights) : 0);
+    if (figure && estimatedQueueTextHeight(queue, leftBudget + rightBudget, "double") < MIN_TEXT_WITH_DOUBLE_FIGURE) {
+      figure = null;
+      leftBudget = SAFE_DOUBLE_COLUMN_HEIGHT;
+      rightBudget = SAFE_DOUBLE_COLUMN_HEIGHT;
+    }
+    const leftItems = takeItemsForBudget(queue, leftBudget, "double");
+    if (leftItems.length === 0) {
+      leftItems.push(forceTakeOneItem(queue, "double"));
+    }
+    const rightItems = takeItemsForBudget(queue, rightBudget, "double");
+    if (rightItems.length === 0 && queue.length > 0) {
+      rightItems.push(forceTakeOneItem(queue, "double"));
+    }
+    if (figure) figureCursor += 1;
+
+    const columns = [
+      columnFromItems(leftItems),
+      columnFromItems(rightItems)
+    ];
+    pages.push(buildSafeTextPage(
+      sourcePage,
+      pages.length,
+      [...leftItems, ...rightItems],
+      columns,
+      figure ? [figure] : [],
+      figure ? figurePlacement : undefined
+    ));
+  }
+
+  return pages;
+}
+
+function shouldPlaceFigure(
+  pageIndex: number,
+  figureCursor: number,
+  figurePool: PaperFigure[],
+  placementInterval: number
+): boolean {
+  return figureCursor < figurePool.length && pageIndex > 0 && pageIndex % placementInterval === 0;
+}
+
+function normalizeFigureForTemplate(figure: PaperFigure, templateId: PaperPage["templateId"]): PaperFigure {
+  if (figure.chartType === "formula") {
+    return {
+      ...figure,
+      layout: templateId === "double-column-conference" ? "double_column_small" : "single_full_width"
+    };
+  }
+  return {
+    ...figure,
+    layout: templateId === "double-column-conference" ? "double_column_small" : "single_full_width"
+  };
+}
+
+function figureSlotHeight(
+  figure: PaperFigure,
+  template: "single" | "double",
+  figureHeights: FigureHeightMap | undefined
+): number {
+  const measured = figureHeights?.[figure.id];
+  if (measured && Number.isFinite(measured)) {
+    const fallback = fallbackFigureSlotHeight(figure, template);
+    const min = Math.max(template === "single" ? 160 : 136, fallback - 38);
+    const max = Math.min(template === "single" ? 380 : 326, fallback + 46);
+    return Math.ceil(clamp(measured, min, max));
+  }
+  return fallbackFigureSlotHeight(figure, template);
+}
+
+function fallbackFigureSlotHeight(figure: PaperFigure, template: "single" | "double"): number {
+  const size = figureSize(figure);
+  if (template === "single") {
+    if (size === "compact") return 220;
+    if (size === "tall") return 350;
+    return 286;
+  }
+  if (size === "compact") return 176;
+  if (size === "tall") return 306;
+  return 246;
+}
+
+function figureSize(figure: PaperFigure): "compact" | "regular" | "tall" {
+  const data = figure.data;
+  if (figure.chartType === "formula") return "compact";
+  if (figure.chartType === "plain_table" || figure.chartType === "table") return "tall";
+  if (figure.chartType === "sankey" || figure.chartType === "graph" || figure.chartType === "network") return "tall";
+  if (figure.chartType === "multi_panel" || figure.chartType === "flow") return "tall";
+  if (figure.chartType === "candlestick" || figure.chartType === "gantt") return "tall";
+  if (data?.kind === "series" && data.labels.length <= 5) return "compact";
+  if (data?.kind === "ranked" && data.labels.length <= 5) return "compact";
+  return "regular";
+}
+
+function buildSafeTextPage(
+  sourcePage: PaperPage,
+  localIndex: number,
+  items: FlowItem[],
+  columns?: PaperColumn[],
+  figures: PaperFigure[] = [],
+  figurePlacement?: PaperPage["figurePlacement"]
+): PaperPage {
+  const first = items[0];
+  const sectionMarkers = markersFromItems(items);
+  return {
+    ...sourcePage,
+    id: `page-text-safe-${localIndex}`,
+    index: localIndex,
+    role: "text",
+    sectionTitle: first?.sectionTitle ?? sourcePage.sectionTitle,
+    sectionMarkers,
+    paragraphs: items.map((item) => item.text),
+    columns,
+    figure: figures[0],
+    figures: figures.length > 0 ? figures : undefined,
+    figurePlacement,
+    figureLayout: figures[0]?.layout,
+    sourceChapterId: first?.sourceChapterId ?? sourcePage.sourceChapterId,
+    sourceProgress: first?.sourceProgress ?? sourcePage.sourceProgress,
+    workScore: Math.min(0.98, Math.max(sourcePage.workScore, first?.workScore ?? 0.82))
+  };
+}
+
+function columnFromItems(items: FlowItem[]): PaperColumn {
+  return {
+    paragraphs: items.map((item) => item.text),
+    sectionMarkers: markersFromItems(items)
+  };
+}
+
+function markersFromItems(items: FlowItem[]): PaperPage["sectionMarkers"] {
+  return items
+    .map((item, paragraphIndex) =>
+      item.marker ? { paragraphIndex, title: item.marker } : null
+    )
+    .filter((marker): marker is { paragraphIndex: number; title: string } => Boolean(marker));
+}
+
+function takeItemsForBudget(
+  queue: FlowItem[],
+  budget: number,
+  mode: "single" | "double"
+): FlowItem[] {
+  const items: FlowItem[] = [];
+  let used = 0;
+
+  while (queue.length > 0) {
+    const item = queue[0];
+    const itemHeight = estimateItemHeight(item, mode);
+    const remaining = budget - used;
+
+    if (itemHeight <= remaining) {
+      items.push(item);
+      queue.shift();
+      used += itemHeight;
+      continue;
+    }
+
+    const split = splitItemForHeight(item, remaining, mode);
+    if (split) {
+      items.push(split.head);
+      queue[0] = split.tail;
+    }
+    break;
+  }
+
+  return items;
+}
+
+function estimatedQueueTextHeight(queue: FlowItem[], budget: number, mode: "single" | "double"): number {
+  let used = 0;
+  for (const item of queue) {
+    const itemHeight = estimateItemHeight(item, mode);
+    if (used + itemHeight > budget) {
+      return used;
+    }
+    used += itemHeight;
+  }
+  return used;
+}
+
+function forceTakeOneItem(queue: FlowItem[], mode: "single" | "double"): FlowItem {
+  const item = queue.shift();
+  if (!item) {
+    return {
+      text: "",
+      language: "zh",
+      sourceProgress: 0,
+      workScore: 0.82
+    };
+  }
+  const itemHeight = estimateItemHeight(item, mode);
+  const budget = mode === "single" ? SAFE_SINGLE_HEIGHT : SAFE_DOUBLE_COLUMN_HEIGHT;
+  if (itemHeight <= budget) return item;
+  const split = splitItemForHeight(item, budget, mode);
+  if (!split) return item;
+  queue.unshift(split.tail);
+  return split.head;
+}
+
+function estimateItemHeight(item: ParagraphItem, mode: "single" | "double"): number {
+  const text = item.text.trim();
+  const chineseChars = text.match(/[\u4e00-\u9fa5]/g)?.length ?? 0;
+  const weightedLength = text.length + chineseChars * 0.18;
+  const charsPerLine = mode === "double" ? 42 : 76;
+  const lineHeight = mode === "double" ? 17.8 : 20.5;
+  const lines = Math.max(1, Math.ceil(weightedLength / charsPerLine));
+  const sectionHeight = item.marker ? 30 : 0;
+  const paragraphGap = text.length > 90 ? 7 : 5;
+  return Math.ceil(lines * lineHeight + paragraphGap + sectionHeight);
+}
+
+function splitItemForHeight(
+  item: FlowItem,
+  availableHeight: number,
+  mode: "single" | "double"
+): { head: FlowItem; tail: FlowItem } | null {
+  const text = item.text.trim();
+  if (text.length < SAFE_MIN_TEXT_SLICE * 2 || availableHeight < 48) return null;
+
+  const fullHeight = estimateItemHeight(item, mode);
+  const reservedMarkerHeight = item.marker ? 34 : 0;
+  const ratio = clamp((availableHeight - reservedMarkerHeight - 10) / Math.max(1, fullHeight - reservedMarkerHeight), 0.18, 0.82);
+  const splitIndex = findParagraphSplitIndex(text, Math.round(text.length * ratio));
+  if (splitIndex < SAFE_MIN_TEXT_SLICE || text.length - splitIndex < SAFE_MIN_TEXT_SLICE) return null;
+
+  const headText = text.slice(0, splitIndex).trim();
+  const tailText = text.slice(splitIndex).trim();
+  if (!headText || !tailText) return null;
+
+  return {
+    head: {
+      ...item,
+      text: headText
+    },
+    tail: {
+      ...item,
+      marker: undefined,
+      text: tailText
+    }
+  };
 }
 
 function ensureNextTextDraft(
@@ -383,6 +853,21 @@ function labelsFor(language: PaperPage["language"], count: number): string[] {
 }
 
 function createTextPageDraft(page: PaperPage): TextPageDraft {
+  if (page.columns?.length) {
+    return {
+      page,
+      items: page.columns.flatMap((column) => {
+        const markers = new Map(
+          (column.sectionMarkers ?? []).map((marker) => [marker.paragraphIndex, marker.title])
+        );
+        return column.paragraphs.map((text, index) => ({
+          marker: markers.get(index),
+          text
+        }));
+      })
+    };
+  }
+
   const markers = new Map(
     (page.sectionMarkers ?? []).map((marker) => [marker.paragraphIndex, marker.title])
   );
@@ -410,7 +895,7 @@ function measureTextPages(pages: PaperPage[]): Map<string, PageMeasurement> {
     const fragmentHeights = Array.from(content.querySelectorAll<HTMLElement>(".text-fragment")).map(
       (fragment) => fragment.getBoundingClientRect().height
     );
-    const contentHeight = content.scrollHeight;
+    const contentHeight = measureRenderedContentHeight(content);
     const safeHeight = content.clientHeight || content.getBoundingClientRect().height;
     result.set(pageId, {
       blank: safeHeight - contentHeight,
@@ -421,6 +906,21 @@ function measureTextPages(pages: PaperPage[]): Map<string, PageMeasurement> {
   }
 
   return result;
+}
+
+function measureRenderedContentHeight(content: HTMLElement): number {
+  const contentRect = content.getBoundingClientRect();
+  const candidates = Array.from(
+    content.querySelectorAll<HTMLElement>(
+      ".text-fragment, .figure-block, .inline-figures, .paper-flow-span"
+    )
+  );
+  const bottom = candidates.reduce((max, node) => {
+    const rect = node.getBoundingClientRect();
+    if (rect.height <= 0) return max;
+    return Math.max(max, rect.bottom - contentRect.top);
+  }, 0);
+  return Math.ceil(bottom);
 }
 
 function findNextTextDraftIndex(drafts: Array<TextPageDraft | null>, index: number): number {
@@ -441,6 +941,7 @@ function rebuildPages(
         ? {
             ...draft.page,
             paragraphs: draft.items.map((item) => item.text),
+            columns: undefined,
             sectionMarkers: draft.items
               .map((item, paragraphIndex) =>
                 item.marker ? { paragraphIndex, title: item.marker } : null

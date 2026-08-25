@@ -105,10 +105,17 @@ export type PaperFigure = {
 	    | "plain_table"
 	    | "flow"
 	    | "multi_panel"
-	    | "formula";
+	    | "formula"
+	    | "custom";
   data?: PaperFigureData;
+  customRenderer?: PaperFigureCustomRenderer;
   sourceChapterId?: string;
   workScoreBonus: number;
+};
+
+export type PaperFigureCustomRenderer = {
+  language: "html";
+  code: string;
 };
 
 export type PaperFigureData =
@@ -158,6 +165,7 @@ export type PaperFigureData =
 	  | {
 	      kind: "sankey";
 	      nodes: string[];
+	      layers?: number[];
 	      links: Array<{ source: number; target: number; value: number }>;
 	    }
 	  | {
@@ -165,7 +173,21 @@ export type PaperFigureData =
 	      nodes: string[];
 	      links: Array<[number, number]>;
 	      variant: "pipeline" | "decision" | "swimlane";
+	    }
+	  | {
+	      kind: "custom";
+	      props?: Record<string, string | number | boolean | Array<string | number>>;
 	    };
+
+export type PaperColumn = {
+  paragraphs: string[];
+  sectionMarkers?: Array<{
+    paragraphIndex: number;
+    title: string;
+  }>;
+};
+
+export type PaperColumnFigurePlacement = "left" | "right";
 
 export type BookStats = {
   completed: boolean;
@@ -196,8 +218,10 @@ export type PaperPage = {
     title: string;
   }>;
   paragraphs?: string[];
+  columns?: PaperColumn[];
   figure?: PaperFigure;
   figures?: PaperFigure[];
+  figurePlacement?: PaperColumnFigurePlacement;
   figureLayout?: FigureLayoutType;
   sourceChapterId?: string;
   sourceProgress: number;
@@ -222,6 +246,12 @@ export type PaperDocument = {
   pages: PaperPage[];
   references: string[];
   stats?: BookStats;
+  layoutCache?: {
+    version: number;
+    pages: PaperPage[];
+    figureHeights: Record<string, number>;
+    createdAt: number;
+  };
   createdAt: number;
 };
 
@@ -231,10 +261,29 @@ export type ReadingPosition = {
   updatedAt: number;
 };
 
+export type ReadingBookmark = {
+  id: string;
+  pageIndex: number;
+  title: string;
+  createdAt: number;
+};
+
+export type CustomChartTemplate = {
+  id: string;
+  name: string;
+  enabled?: boolean;
+  figure: PaperFigure;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type StoredLibraryData = {
   documents: PaperDocument[];
   sourceBooks: Record<string, ParsedBook>;
   documentRedactions: Record<string, string>;
+  readingPositions?: Record<string, ReadingPosition>;
+  readingBookmarks?: Record<string, ReadingBookmark[]>;
+  customChartTemplates?: CustomChartTemplate[];
   settings?: {
     paperTitleTemplatesInput?: string;
     sectionTitleTemplatesInput?: string;

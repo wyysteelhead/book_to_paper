@@ -5,7 +5,8 @@ import type {
   PaperFigure,
   PaperTemplate,
   ParsedBook,
-  ChartType
+  ChartType,
+  CustomChartTemplate
 } from "../../common/types";
 import { normalizeFigureLayout, spanLayoutForChart } from "./chartConfigs";
 
@@ -14,7 +15,7 @@ export function generateFigures(
   template: PaperTemplate,
   language: DocumentLanguage,
   stats?: BookStats,
-  options: { enabledChartTypes?: ChartType[] } = {}
+  options: { enabledChartTypes?: ChartType[]; customChartTemplates?: CustomChartTemplate[] } = {}
 ): PaperFigure[] {
   const layouts = template.defaultFigureLayouts;
   const chapterCount = Math.max(book.chapters.length, 1);
@@ -22,6 +23,8 @@ export function generateFigures(
   const figures: PaperFigure[] = [];
 
   const enabledTypes = normalizeEnabledTypes(options.enabledChartTypes);
+  const customFigures = createCustomTemplateFigures(options.customChartTemplates, template, language);
+  figures.push(...customFigures);
   const statFigures = createStatFigures(stats, template, language).filter((figure) =>
     enabledTypes.has(figure.chartType)
   );
@@ -58,6 +61,36 @@ export function generateFigures(
       number: index + 1
     }))
     .map((figure) => normalizeFigureLayout(figure, template.columnMode));
+}
+
+function createCustomTemplateFigures(
+  templates: CustomChartTemplate[] | undefined,
+  template: PaperTemplate,
+  language: DocumentLanguage
+): PaperFigure[] {
+  return (templates ?? [])
+    .filter((item) => item.enabled !== false)
+    .map((item, index) => {
+      const figure = item.figure;
+      return normalizeFigureLayout(
+        {
+          ...figure,
+          id: `custom-template-${item.id}-${index}`,
+          number: index + 1,
+          layout: template.columnMode === "double"
+            ? figure.layout
+            : figure.layout === "double_column_small"
+              ? "single_full_width"
+              : figure.layout,
+          title: figure.title || item.name || (language === "zh" ? "自定义论文组件" : "Custom Paper Component"),
+          caption: figure.caption || (language === "zh" ? "图 0. 自定义模板生成的论文组件。" : "Figure 0. Custom paper component generated from template."),
+          chartType: figure.chartType ?? "custom",
+          data: figure.data ?? { kind: "custom", props: {} },
+          workScoreBonus: figure.workScoreBonus ?? 0.08
+        },
+        template.columnMode
+      );
+    });
 }
 
 function createStatFigures(
@@ -612,31 +645,69 @@ function candlestickData(index: number, language: DocumentLanguage): PaperFigure
 }
 
 function sankeyData(index: number, language: DocumentLanguage): PaperFigure["data"] {
-  const nodes = (language === "zh"
-    ? ["输入", "开端", "转折", "伏笔", "冲突", "回收", "余波", "残差", "校准", "输出"]
-    : ["Input", "Start", "Turn", "Cue", "Conflict", "Return", "After", "Residual", "Audit", "Output"]
-  ).slice(0, seededRange(index, 7, 10));
-  const mode = index % 3;
-  const split = Math.floor(nodes.length / 2);
+  const sourceLabels = language === "zh" ? ["输入", "开端", "线索"] : ["Input", "Start", "Cue"];
+  const middleLabels = language === "zh"
+    ? ["转折", "伏笔", "冲突", "余波", "残差", "校准"]
+    : ["Turn", "Foreshadow", "Conflict", "After", "Residual", "Audit"];
+  const sinkLabels = language === "zh" ? ["回收", "回声", "输出"] : ["Return", "Echo", "Output"];
+  const sourceCount = seededRange(index, 2, 3);
+  const middleCount = seededRange(index + 3, 4, 6);
+  const sinkCount = seededRange(index + 7, 2, 3);
+  const nodes = [
+    ...sourceLabels.slice(0, sourceCount),
+    ...middleLabels.slice(0, middleCount),
+    ...sinkLabels.slice(0, sinkCount)
+  ];
+  const layers = [
+    ...Array.from({ length: sourceCount }, () => 0),
+    ...Array.from({ length: middleCount }, (_, offset) => 1 + ((offset + index) % 2)),
+    ...Array.from({ length: sinkCount }, () => 3)
+  ];
+  const mode = index % 4;
+  const links: Array<{ source: number; target: number; value: number }> = [];
+  const add = (source: number, target: number, salt: number, base = 2): void => {
+    if (source < 0 || target < 0 || source >= nodes.length || target >= nodes.length) return;
+    if ((layers[target] ?? 0) <= (layers[source] ?? 0)) return;
+    links.push({ source, target, value: base + ((index + salt * 7 + source * 3 + target) % 7) });
+  };
+  const sources = layers.map((layer, nodeIndex) => layer === 0 ? nodeIndex : -1).filter((nodeIndex) => nodeIndex >= 0);
+  const earlyMiddle = layers.map((layer, nodeIndex) => layer === 1 ? nodeIndex : -1).filter((nodeIndex) => nodeIndex >= 0);
+  const lateMiddle = layers.map((layer, nodeIndex) => layer === 2 ? nodeIndex : -1).filter((nodeIndex) => nodeIndex >= 0);
+  const sinks = layers.map((layer, nodeIndex) => layer === 3 ? nodeIndex : -1).filter((nodeIndex) => nodeIndex >= 0);
+
+  for (const source of sources) {
+    for (let offset = 0; offset < 2; offset += 1) {
+      add(source, earlyMiddle[(source + offset + index) % earlyMiddle.length], offset);
+    }
+  }
+
+  for (const middle of earlyMiddle) {
+    const targets = mode === 1 ? lateMiddle.slice().reverse() : lateMiddle;
+    for (let offset = 0; offset < (mode === 2 ? 2 : 1); offset += 1) {
+      add(middle, targets[(middle + offset + index) % targets.length], offset + 5);
+    }
+    if (mode === 3) {
+      add(middle, sinks[(middle + index) % sinks.length], middle + 8, 1);
+    }
+  }
+
+  for (const middle of lateMiddle) {
+    for (let offset = 0; offset < 2; offset += 1) {
+      add(middle, sinks[(middle + offset + index) % sinks.length], offset + 11, offset === 0 ? 2 : 1);
+    }
+  }
+
+  for (const source of sources) {
+    if ((source + index) % 2 === 0) {
+      add(source, lateMiddle[(source + index) % lateMiddle.length], source + 17, 1);
+    }
+  }
+
   return {
     kind: "sankey",
     nodes,
-    links:
-      mode === 0
-        ? nodes.slice(0, split).flatMap((_, nodeIndex) => [
-            { source: nodeIndex, target: split + (nodeIndex % (nodes.length - split)), value: 2 + ((index + nodeIndex) % 6) },
-            ...(nodeIndex + 1 < split ? [{ source: nodeIndex, target: split + ((nodeIndex + 1) % (nodes.length - split)), value: 1 + ((index + nodeIndex) % 4) }] : [])
-          ])
-        : mode === 1
-          ? nodes.slice(1, nodes.length - 1).map((_, nodeIndex) => ({
-              source: nodeIndex === 0 ? 0 : nodeIndex,
-              target: nodeIndex + 1,
-              value: 2 + ((index + nodeIndex) % 7)
-            }))
-          : nodes.slice(0, split).flatMap((_, nodeIndex) => [
-              { source: 0, target: 1 + nodeIndex, value: 2 + ((index + nodeIndex) % 5) },
-              { source: 1 + nodeIndex, target: nodes.length - 1, value: 1 + ((index + nodeIndex) % 6) }
-            ])
+    layers,
+    links: links.slice(0, 28)
   };
 }
 

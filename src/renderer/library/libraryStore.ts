@@ -1,5 +1,15 @@
 import { create } from "zustand";
-import type { ChartType, EnabledChartTypes, FigureFrequency, PaperDocument, PaperTemplateId, ParsedBook } from "../../common/types";
+import type {
+  ChartType,
+  CustomChartTemplate,
+  EnabledChartTypes,
+  FigureFrequency,
+  PaperDocument,
+  PaperTemplateId,
+  ParsedBook,
+  ReadingBookmark,
+  ReadingPosition
+} from "../../common/types";
 import { parseEpub } from "../import/parseEpub";
 import { parseTxt } from "../import/parseTxt";
 import { bookToPaper } from "../paper/bookToPaper";
@@ -37,6 +47,9 @@ type LibraryState = {
   typography: TypographySettings;
   pendingRedactionInput: string;
   documentRedactions: Record<string, string>;
+  readingPositions: Record<string, ReadingPosition>;
+  readingBookmarks: Record<string, ReadingBookmark[]>;
+  customChartTemplates: CustomChartTemplate[];
   sourceBooks: Record<string, ParsedBook>;
   hydrateLibrary: () => Promise<void>;
   importBook: () => Promise<void>;
@@ -55,6 +68,13 @@ type LibraryState = {
   setPendingRedactionInput: (value: string) => void;
   setDocumentRedactionInput: (bookId: string, value: string) => void;
   setActiveDocumentRedactionInput: (value: string) => void;
+  saveReadingPosition: (documentId: string, position: ReadingPosition) => void;
+  addReadingBookmark: (documentId: string, bookmark: ReadingBookmark) => void;
+  removeReadingBookmark: (documentId: string, bookmarkId: string) => void;
+  saveCustomChartTemplate: (template: CustomChartTemplate) => void;
+  setCustomChartTemplateEnabled: (templateId: string, enabled: boolean) => void;
+  removeCustomChartTemplate: (templateId: string) => void;
+  saveDocumentLayoutCache: (documentId: string, layoutCache: NonNullable<PaperDocument["layoutCache"]>) => void;
   refreshDocumentCharts: (documentId: string) => Promise<void>;
   refreshActiveDocumentCharts: () => Promise<void>;
   regenerateActiveDocument: (templateId: PaperTemplateId) => void;
@@ -100,7 +120,8 @@ export const defaultEnabledChartTypes: Record<ChartType, boolean> = {
   plain_table: true,
   flow: true,
   multi_panel: true,
-  formula: true
+  formula: true,
+  custom: true
 };
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
@@ -112,7 +133,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   importError: null,
   useRealStats: true,
   statsTimeoutMs: 2500,
-  figureFrequency: "high",
+  figureFrequency: "standard",
   hidePageHeader: false,
   enabledChartTypes: defaultEnabledChartTypes,
   paperTitleTemplatesInput: defaultPaperTitleTemplates.join("\n"),
@@ -127,6 +148,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
   pendingRedactionInput: "",
   documentRedactions: {},
+  readingPositions: {},
+  readingBookmarks: {},
+  customChartTemplates: [],
   sourceBooks: {},
   hydrateLibrary: async () => {
     const cached = await window.book2paper?.loadLibraryCache?.();
@@ -135,9 +159,12 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       documents: cached.documents ?? [],
       sourceBooks: cached.sourceBooks ?? {},
       documentRedactions: cached.documentRedactions ?? {},
+      readingPositions: cached.readingPositions ?? {},
+      readingBookmarks: normalizeReadingBookmarks(cached.readingBookmarks),
+      customChartTemplates: normalizeCustomChartTemplates(cached.customChartTemplates),
       paperTitleTemplatesInput: cached.settings?.paperTitleTemplatesInput ?? defaultPaperTitleTemplates.join("\n"),
       sectionTitleTemplatesInput: cached.settings?.sectionTitleTemplatesInput ?? defaultSectionTitleTemplates.join("\n"),
-      figureFrequency: cached.settings?.figureFrequency ?? "high",
+      figureFrequency: cached.settings?.figureFrequency ?? "standard",
       hidePageHeader: cached.settings?.hidePageHeader ?? false,
       enabledChartTypes: mergeEnabledChartTypes(cached.settings?.enabledChartTypes),
       templateId: cached.settings?.templateId ?? "double-column-conference"
@@ -206,7 +233,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         figureFrequency: get().figureFrequency,
         paperTitleTemplates: parseTemplateLines(get().paperTitleTemplatesInput),
         sectionTitleTemplates: parseSectionTitleTemplates(get().sectionTitleTemplatesInput),
-        enabledChartTypes: enabledChartTypeList(get().enabledChartTypes)
+        enabledChartTypes: enabledChartTypeList(get().enabledChartTypes),
+        customChartTemplates: enabledCustomChartTemplates(get().customChartTemplates)
       });
       setProgress(`已生成 ${document.pages.length} 页，正在打开阅读视图...`, 96);
       await yieldToUi();
@@ -243,6 +271,12 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         Object.entries(state.documentRedactions).filter(([bookId]) =>
           state.documents.some((document) => document.id !== documentId && document.bookId === bookId)
         )
+      ),
+      readingPositions: Object.fromEntries(
+        Object.entries(state.readingPositions).filter(([id]) => id !== documentId)
+      ),
+      readingBookmarks: Object.fromEntries(
+        Object.entries(state.readingBookmarks).filter(([id]) => id !== documentId)
       )
     }));
     void persistLibraryCache(libraryCacheFromState(get()));
@@ -305,6 +339,73 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         }
       };
     }),
+  saveReadingPosition: (documentId, position) => {
+    set((state) => ({
+      readingPositions: {
+        ...state.readingPositions,
+        [documentId]: position
+      }
+    }));
+    void persistLibraryCache(libraryCacheFromState(get()));
+  },
+  addReadingBookmark: (documentId, bookmark) => {
+    set((state) => ({
+      readingBookmarks: {
+        ...state.readingBookmarks,
+        [documentId]: [
+          bookmark,
+          ...(state.readingBookmarks[documentId] ?? []).filter(
+            (existing) => existing.pageIndex !== bookmark.pageIndex
+          )
+        ].slice(0, 40)
+      }
+    }));
+    void persistLibraryCache(libraryCacheFromState(get()));
+  },
+  removeReadingBookmark: (documentId, bookmarkId) => {
+    set((state) => ({
+      readingBookmarks: {
+        ...state.readingBookmarks,
+        [documentId]: (state.readingBookmarks[documentId] ?? []).filter((bookmark) => bookmark.id !== bookmarkId)
+      }
+    }));
+    void persistLibraryCache(libraryCacheFromState(get()));
+  },
+  saveCustomChartTemplate: (template) => {
+    set((state) => ({
+      customChartTemplates: [
+        { ...template, enabled: template.enabled ?? true },
+        ...state.customChartTemplates.filter((existing) => existing.id !== template.id)
+      ].slice(0, 80)
+    }));
+    void persistLibraryCache(libraryCacheFromState(get()));
+  },
+  setCustomChartTemplateEnabled: (templateId, enabled) => {
+    set((state) => ({
+      customChartTemplates: state.customChartTemplates.map((template) =>
+        template.id === templateId ? { ...template, enabled, updatedAt: Date.now() } : template
+      )
+    }));
+    void persistLibraryCache(libraryCacheFromState(get()));
+  },
+  removeCustomChartTemplate: (templateId) => {
+    set((state) => ({
+      customChartTemplates: state.customChartTemplates.filter((template) => template.id !== templateId)
+    }));
+    void persistLibraryCache(libraryCacheFromState(get()));
+  },
+  saveDocumentLayoutCache: (documentId, layoutCache) => {
+    set((state) => ({
+      activeDocument:
+        state.activeDocument?.id === documentId
+          ? { ...state.activeDocument, layoutCache }
+          : state.activeDocument,
+      documents: state.documents.map((document) =>
+        document.id === documentId ? { ...document, layoutCache } : document
+      )
+    }));
+    void persistLibraryCache(libraryCacheFromState(get()));
+  },
   refreshDocumentCharts: async (documentId) => {
     const target = get().documents.find((document) => document.id === documentId);
     if (!target) return;
@@ -337,7 +438,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         figureFrequency: get().figureFrequency,
         paperTitleTemplates: parseTemplateLines(get().paperTitleTemplatesInput),
         sectionTitleTemplates: parseSectionTitleTemplates(get().sectionTitleTemplatesInput),
-        enabledChartTypes: enabledChartTypeList(get().enabledChartTypes)
+        enabledChartTypes: enabledChartTypeList(get().enabledChartTypes),
+        customChartTemplates: enabledCustomChartTemplates(get().customChartTemplates)
       });
       set((state) => ({
         activeDocument: state.activeDocument?.id === target.id ? refreshed : state.activeDocument,
@@ -384,7 +486,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         figureFrequency: state.figureFrequency,
         paperTitleTemplates: parseTemplateLines(state.paperTitleTemplatesInput),
         sectionTitleTemplates: parseSectionTitleTemplates(state.sectionTitleTemplatesInput),
-        enabledChartTypes: enabledChartTypeList(state.enabledChartTypes)
+        enabledChartTypes: enabledChartTypeList(state.enabledChartTypes),
+        customChartTemplates: enabledCustomChartTemplates(state.customChartTemplates)
       });
       return {
         templateId,
@@ -402,6 +505,9 @@ type PersistableState = {
   documents: PaperDocument[];
   sourceBooks: Record<string, ParsedBook>;
   documentRedactions: Record<string, string>;
+  readingPositions: Record<string, ReadingPosition>;
+  readingBookmarks: Record<string, ReadingBookmark[]>;
+  customChartTemplates: CustomChartTemplate[];
   paperTitleTemplatesInput: string;
   sectionTitleTemplatesInput: string;
   figureFrequency: FigureFrequency;
@@ -415,6 +521,9 @@ function libraryCacheFromState(state: LibraryState): PersistableState {
     documents: state.documents,
     sourceBooks: state.sourceBooks,
     documentRedactions: state.documentRedactions,
+    readingPositions: state.readingPositions,
+    readingBookmarks: state.readingBookmarks,
+    customChartTemplates: state.customChartTemplates,
     paperTitleTemplatesInput: state.paperTitleTemplatesInput,
     sectionTitleTemplatesInput: state.sectionTitleTemplatesInput,
     figureFrequency: state.figureFrequency,
@@ -429,6 +538,9 @@ async function persistLibraryCache(state: PersistableState): Promise<void> {
     documents: state.documents,
     sourceBooks: state.sourceBooks,
     documentRedactions: state.documentRedactions,
+    readingPositions: state.readingPositions,
+    readingBookmarks: state.readingBookmarks,
+    customChartTemplates: state.customChartTemplates,
     settings: {
       paperTitleTemplatesInput: state.paperTitleTemplatesInput,
       sectionTitleTemplatesInput: state.sectionTitleTemplatesInput,
@@ -446,6 +558,37 @@ function mergeEnabledChartTypes(cached: EnabledChartTypes | undefined): Record<C
     ...defaultEnabledChartTypes,
     ...(cached ?? {})
   };
+}
+
+function normalizeReadingBookmarks(
+  bookmarks: Record<string, ReadingBookmark[]> | undefined
+): Record<string, ReadingBookmark[]> {
+  return Object.fromEntries(
+    Object.entries(bookmarks ?? {}).map(([documentId, documentBookmarks]) => {
+      const seenPages = new Set<number>();
+      return [
+        documentId,
+        documentBookmarks.filter((bookmark) => {
+          if (seenPages.has(bookmark.pageIndex)) return false;
+          seenPages.add(bookmark.pageIndex);
+          return true;
+        })
+      ];
+    })
+  );
+}
+
+function normalizeCustomChartTemplates(
+  templates: CustomChartTemplate[] | undefined
+): CustomChartTemplate[] {
+  return (templates ?? []).map((template) => ({
+    ...template,
+    enabled: template.enabled ?? true
+  }));
+}
+
+function enabledCustomChartTemplates(templates: CustomChartTemplate[]): CustomChartTemplate[] {
+  return templates.filter((template) => template.enabled !== false);
 }
 
 function enabledChartTypeList(types: Record<ChartType, boolean>): ChartType[] {

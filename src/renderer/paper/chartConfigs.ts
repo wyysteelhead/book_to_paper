@@ -136,6 +136,12 @@ export const chartConfigs: Record<PaperFigure["chartType"], ChartConfig> = {
     paletteMode: "sequential",
     minSpanPoints: 99,
     inlineHeight: "compact"
+  },
+  custom: {
+    placement: "span_allowed",
+    paletteMode: "mixed",
+    minSpanPoints: 1,
+    inlineHeight: "medium"
   }
 };
 

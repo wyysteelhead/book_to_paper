@@ -26,22 +26,28 @@ export function MatrixChart({ figure, palette }: { figure: PaperFigure; palette:
 }
 
 export function PieChart({ figure, palette }: { figure: PaperFigure; palette: string[] }): JSX.Element {
-  const labels = figure.data?.kind === "ranked" || figure.data?.kind === "series" ? figure.data.labels.slice(0, 5) : ["A", "B", "C", "D"];
-  const values = figure.data?.kind === "ranked" || figure.data?.kind === "series" ? figure.data.values.slice(0, 5) : [34, 22, 18, 13];
+  const labels = figure.data?.kind === "ranked" || figure.data?.kind === "series" ? figure.data.labels.slice(0, 6) : ["A", "B", "C", "D"];
+  const values = figure.data?.kind === "ranked" || figure.data?.kind === "series" ? figure.data.values.slice(0, 6) : [34, 22, 18, 13];
+  const pieCount = figure.number % 3 === 0 && values.length >= 5 ? 2 : 1;
+  const groups =
+    pieCount === 2
+      ? [
+          { labels: labels.filter((_, index) => index % 2 === 0), values: values.filter((_, index) => index % 2 === 0) },
+          { labels: labels.filter((_, index) => index % 2 === 1), values: values.filter((_, index) => index % 2 === 1) }
+        ]
+      : [{ labels, values }];
   const total = Math.max(1, values.reduce((sum, value) => sum + value, 0));
-  let current = 0;
-  const gradient = values
-    .map((value, index) => {
-      const start = (current / total) * 100;
-      current += value;
-      const end = (current / total) * 100;
-      return `${palette[index % palette.length]} ${start}% ${end}%`;
-    })
-    .join(", ");
   return (
-    <div className="pie-chart" style={paletteStyle(palette)}>
-      <span style={{ background: `conic-gradient(${gradient})` }} />
-      <div>
+    <div className={`pie-chart pie-count-${pieCount}`} style={paletteStyle(palette)}>
+      <div className="pie-discs">
+        {groups.map((group, groupIndex) => (
+          <span
+            key={groupIndex}
+            style={{ background: `conic-gradient(${pieGradient(group.values, palette, groupIndex)})` }}
+          />
+        ))}
+      </div>
+      <div className="pie-legend">
         {labels.map((label, index) => (
           <small key={label}>
             <i style={{ background: palette[index % palette.length] }} />
@@ -51,6 +57,19 @@ export function PieChart({ figure, palette }: { figure: PaperFigure; palette: st
       </div>
     </div>
   );
+}
+
+function pieGradient(values: number[], palette: string[], offset: number): string {
+  const total = Math.max(1, values.reduce((sum, value) => sum + value, 0));
+  let current = 0;
+  return values
+    .map((value, index) => {
+      const start = (current / total) * 100;
+      current += value;
+      const end = (current / total) * 100;
+      return `${palette[(index + offset) % palette.length]} ${start}% ${end}%`;
+    })
+    .join(", ");
 }
 
 export function ScatterChart({ figure, palette }: { figure: PaperFigure; palette: string[] }): JSX.Element {
@@ -204,29 +223,62 @@ export function CandlestickChart({ figure, palette }: { figure: PaperFigure; pal
   const high = Math.max(...data.values.map((item) => item.high), 1);
   const low = Math.min(...data.values.map((item) => item.low), 0);
   const spread = Math.max(1, high - low);
+  const rows = data.values.slice(0, 10);
+  const width = 260;
+  const height = 170;
+  const plotLeft = 34;
+  const plotRight = 238;
+  const plotTop = 18;
+  const plotBottom = 132;
+  const plotHeight = plotBottom - plotTop;
+  const step = (plotRight - plotLeft) / Math.max(1, rows.length);
+  const yFor = (value: number): number => plotBottom - ((value - low) / spread) * plotHeight;
   return (
     <div className="candlestick-chart" style={paletteStyle(palette)}>
-      <svg viewBox="0 0 240 150">
-        {data.values.slice(0, 10).map((item, index) => {
-          const x = 24 + index * 20;
-          const yHigh = 124 - ((item.high - low) / spread) * 104;
-          const yLow = 124 - ((item.low - low) / spread) * 104;
-          const yOpen = 124 - ((item.open - low) / spread) * 104;
-          const yClose = 124 - ((item.close - low) / spread) * 104;
+      <svg viewBox={`0 0 ${width} ${height}`} role="img">
+        {[0, 0.5, 1].map((tick) => {
+          const value = low + spread * tick;
+          const y = yFor(value);
+          return (
+            <g key={tick}>
+              <line x1={plotLeft} x2={plotRight} y1={y} y2={y} className="axis-grid" />
+              <text x={plotLeft - 5} y={y + 3} textAnchor="end">
+                {Math.round(value)}
+              </text>
+            </g>
+          );
+        })}
+        <line x1={plotLeft} x2={plotRight} y1={plotBottom} y2={plotBottom} className="axis-line" />
+        <line x1={plotLeft} x2={plotLeft} y1={plotTop} y2={plotBottom} className="axis-line" />
+        {rows.map((item, index) => {
+          const x = plotLeft + step * index + step / 2;
+          const yHigh = yFor(item.high);
+          const yLow = yFor(item.low);
+          const yOpen = yFor(item.open);
+          const yClose = yFor(item.close);
           const up = item.close >= item.open;
           return (
             <g key={`${data.labels[index]}-${index}`}>
               <line x1={x} x2={x} y1={yHigh} y2={yLow} className="axis-line" />
               <rect
-                x={x - 5}
+                x={x - Math.min(6, step * 0.28)}
                 y={Math.min(yOpen, yClose)}
-                width="10"
+                width={Math.min(12, step * 0.56)}
                 height={Math.max(4, Math.abs(yOpen - yClose))}
                 fill={up ? palette[0] : palette[1]}
               />
+              <text x={x} y="151" textAnchor="middle">
+                {shortLabel(data.labels[index] ?? `${index + 1}`)}
+              </text>
             </g>
           );
         })}
+        <text x={plotLeft} y="164">
+          low {Math.round(low)}
+        </text>
+        <text x={plotRight} y="164" textAnchor="end">
+          high {Math.round(high)}
+        </text>
       </svg>
     </div>
   );
@@ -314,28 +366,33 @@ export function GraphChart({ figure, palette }: { figure: PaperFigure; palette: 
 
 export function SankeyChart({ figure, palette }: { figure: PaperFigure; palette: string[] }): JSX.Element {
   const data = figure.data?.kind === "sankey" ? figure.data : fallbackSankey();
-  const nodes = sankeyNodePositions(data.nodes, data.links, figure.number);
+  const nodes = sankeyNodePositions(data.nodes, data.links, figure.number, data.layers);
+  const links = data.links
+    .filter((link) => nodes[link.target % nodes.length].x > nodes[link.source % nodes.length].x)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 24);
   return (
     <div className="sankey-chart" style={paletteStyle(palette)}>
       <svg viewBox="0 0 240 150">
-        {data.links.slice(0, 16).map((link, index) => {
+        {links.map((link, index) => {
           const source = nodes[link.source % nodes.length];
           const target = nodes[link.target % nodes.length];
           const middle = (source.x + target.x) / 2;
+          const bend = ((figure.number + index) % 5 - 2) * 4;
           return (
             <path
               key={`${link.source}-${link.target}-${index}`}
-              d={`M${source.x + 10} ${source.y} C${middle} ${source.y}, ${middle} ${target.y}, ${target.x - 10} ${target.y}`}
+              d={`M${source.x + source.width / 2} ${source.y} C${middle} ${source.y + bend}, ${middle} ${target.y - bend}, ${target.x - target.width / 2} ${target.y}`}
               stroke={palette[index % palette.length]}
-              strokeWidth={Math.max(2, Math.min(13, link.value))}
-              opacity="0.48"
+              strokeWidth={Math.max(2, Math.min(13, link.value * 0.9))}
+              opacity="0.34"
               fill="none"
             />
           );
         })}
         {nodes.map((node, index) => (
           <g key={`${node.label}-${index}`}>
-            <rect x={node.x - 9} y={node.y - 15} width="18" height="30" rx="2" fill={palette[index % palette.length]} opacity="0.84" />
+            <rect x={node.x - node.width / 2} y={node.y - node.height / 2} width={node.width} height={node.height} rx="2" fill={palette[index % palette.length]} opacity="0.84" />
             <text x={node.x + (node.x > 170 ? -14 : 14)} y={node.y + 4} textAnchor={node.x > 170 ? "end" : "start"}>
               {shortLabel(node.label)}
             </text>
@@ -421,28 +478,33 @@ function compactGraphLabel(label: string): string {
 function sankeyNodePositions(
   labels: string[],
   links: Array<{ source: number; target: number; value: number }>,
-  seed: number
-): Array<{ label: string; x: number; y: number }> {
-  const layerCount = seed % 3 === 0 ? 4 : 3;
-  return labels.map((label, index) => {
+  seed: number,
+  explicitLayers?: number[]
+): Array<{ label: string; x: number; y: number; width: number; height: number }> {
+  const layerFor = (index: number): number => {
+    if (explicitLayers?.[index] !== undefined) return explicitLayers[index];
     const hasIncoming = links.some((link) => link.target === index);
     const hasOutgoing = links.some((link) => link.source === index);
-    const inferredLayer = !hasIncoming ? 0 : !hasOutgoing ? layerCount - 1 : 1 + ((index + seed) % Math.max(1, layerCount - 2));
-    const layer = Math.min(layerCount - 1, inferredLayer);
-    const peers = labels
-      .map((_, peerIndex) => peerIndex)
-      .filter((peerIndex) => {
-        const peerIncoming = links.some((link) => link.target === peerIndex);
-        const peerOutgoing = links.some((link) => link.source === peerIndex);
-        const peerLayer = !peerIncoming ? 0 : !peerOutgoing ? layerCount - 1 : 1 + ((peerIndex + seed) % Math.max(1, layerCount - 2));
-        return Math.min(layerCount - 1, peerLayer) === layer;
-      });
+    return !hasIncoming ? 0 : !hasOutgoing ? 3 : 1 + ((index + seed) % 2);
+  };
+  const layerCount = Math.max(3, Math.max(...labels.map((_, index) => layerFor(index))) + 1);
+  return labels.map((label, index) => {
+    const layer = layerFor(index);
+    const peers = labels.map((_, peerIndex) => peerIndex).filter((peerIndex) => layerFor(peerIndex) === layer);
     const peerIndex = Math.max(0, peers.indexOf(index));
     const spacing = 104 / Math.max(1, peers.length);
+    const nodeFlow = Math.max(
+      ...links
+        .filter((link) => link.source === index || link.target === index)
+        .map((link) => link.value),
+      2
+    );
     return {
       label,
       x: 26 + layer * (188 / Math.max(1, layerCount - 1)),
-      y: 24 + spacing / 2 + peerIndex * spacing
+      y: 24 + spacing / 2 + peerIndex * spacing,
+      width: 16,
+      height: Math.max(18, Math.min(42, 14 + nodeFlow * 3))
     };
   });
 }
@@ -492,11 +554,18 @@ function fallbackNetwork() {
 
 function fallbackSankey() {
   return {
-    nodes: ["A", "B", "C", "D", "E", "F"],
+    nodes: ["A", "B", "C", "D", "E", "F", "G", "H"],
+    layers: [0, 0, 1, 1, 2, 2, 3, 3],
     links: [
       { source: 0, target: 3, value: 5 },
-      { source: 1, target: 4, value: 3 },
-      { source: 2, target: 5, value: 4 }
+      { source: 0, target: 4, value: 3 },
+      { source: 1, target: 4, value: 4 },
+      { source: 1, target: 5, value: 6 },
+      { source: 2, target: 5, value: 3 },
+      { source: 3, target: 6, value: 4 },
+      { source: 4, target: 6, value: 5 },
+      { source: 5, target: 7, value: 4 },
+      { source: 6, target: 7, value: 6 }
     ]
   };
 }

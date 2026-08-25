@@ -7,7 +7,8 @@ import type {
   BookStats,
   FigureFrequency,
   PaperFigure,
-  ChartType
+  ChartType,
+  CustomChartTemplate
 } from "../../common/types";
 import { extractKeywords } from "./keywords";
 import { generateFigures } from "./generateFigures";
@@ -43,6 +44,7 @@ export function bookToPaper(
     paperTitleTemplates?: string[];
     sectionTitleTemplates?: string[];
     enabledChartTypes?: ChartType[];
+    customChartTemplates?: CustomChartTemplate[];
   } = {}
 ): PaperDocument {
   const template = getPaperTemplate(templateId);
@@ -50,7 +52,8 @@ export function bookToPaper(
   const language = detectLanguage(`${book.title}\n${allText.slice(0, 2000)}`);
   const keywords = extractKeywords(allText);
   const figures = generateFigures(book, template, language, stats, {
-    enabledChartTypes: options.enabledChartTypes
+    enabledChartTypes: options.enabledChartTypes,
+    customChartTemplates: options.customChartTemplates
   });
   const paperTitle = academicTitle(book.title, keywords, language, options.paperTitleTemplates);
   const pages: PaperPage[] = [];
@@ -182,27 +185,6 @@ export function bookToPaper(
     consumedParagraphs += entries.length;
     figureCursor += figuresToAttach.length;
   }
-
-  pages.push({
-    id: "page-formula",
-    index: pages.length,
-    role: "formula",
-    templateId,
-    language,
-    title: language === "zh" ? "形式化进程估计" : "Formalized Progression Estimate",
-    paragraphs:
-      language === "zh"
-        ? [
-            "S(t) = αD(t) + βR(t) + γC(t)",
-            "其中 D 表示局部密度，R 表示复现信号强度，C 表示章节转移置信度。"
-          ]
-        : [
-            "S(t) = alpha D(t) + beta R(t) + gamma C(t)",
-            "where D denotes local density, R denotes recurring signal strength, and C denotes chapter transition confidence."
-          ],
-    sourceProgress: 0.96,
-    workScore: scorePage("formula")
-  });
 
   pages.push({
     id: "page-references",
@@ -388,9 +370,9 @@ function plannedInlineFigureUnits(
 
   if (nearEnd) return 1;
   if (frequency === "low") return pageIndex % 3 === 0 ? 1 : 0;
-  if (frequency === "standard") return pageIndex % 4 === 0 ? Math.min(2, maxAreaUnits) : 1;
-  if (frequency === "dense") return pageIndex % 3 === 0 ? maxAreaUnits : Math.min(2, maxAreaUnits);
-  return pageIndex % 3 === 0 ? Math.min(3, maxAreaUnits) : Math.min(2, maxAreaUnits);
+  if (frequency === "standard") return pageIndex % 3 === 0 ? Math.min(3, maxAreaUnits) : Math.min(2, maxAreaUnits);
+  if (frequency === "high") return pageIndex % 3 === 0 ? maxAreaUnits : Math.min(2, maxAreaUnits);
+  return pageIndex % 2 === 0 ? maxAreaUnits : Math.min(3, maxAreaUnits);
 }
 
 function nextFigureWindow(figures: PaperFigure[], cursor: number, count: number): PaperFigure[] {
@@ -415,7 +397,10 @@ function nextFigureWindow(figures: PaperFigure[], cursor: number, count: number)
 
 function figureAreaUnitsForFrequency(frequency: FigureFrequency, templateId: PaperTemplateId): number {
   if (templateId === "single-column-report") return 1;
-  return frequency === "low" ? 1 : 2;
+  if (frequency === "low") return 1;
+  if (frequency === "standard") return 3;
+  if (frequency === "high") return 4;
+  return 4;
 }
 
 function pseudoSectionTitle(chapterIndex: number, seed: number, language: DocumentLanguage, customTitles?: string[]): string {

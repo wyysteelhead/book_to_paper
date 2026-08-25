@@ -28,7 +28,9 @@ function createWindow(): void {
 
   if (isDev && process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
-    mainWindow.webContents.openDevTools({ mode: "detach" });
+    if (process.env.OPEN_DEVTOOLS === "1") {
+      mainWindow.webContents.openDevTools({ mode: "detach" });
+    }
   } else {
     mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
   }

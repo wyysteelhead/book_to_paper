@@ -150,18 +150,22 @@ function FormulaChart({
   isChinese: boolean;
 }): JSX.Element {
   const formulas = [
-    "Ψᵢ = ∑ λₖ·xₖ / (1 + δ)",
-    "Ω(t) = α·μₜ + β·σ² - γ",
-    "P(z|θ) ∝ exp(ηᵀφ(z))",
-    "Rₙ = √(Σᵢ wᵢ·Δᵢ²)",
-    "L(θ) = ∏ p(xᵢ|θ) + ε",
-    "κ = (AᵀA + λI)⁻¹Aᵀy"
+    ["Ψᵢ = ∑ λₖ·xₖ / (1 + δ)"],
+    ["Ω(t) = α·μₜ + β·σ² - γ"],
+    ["P(z|θ) ∝ exp(ηᵀφ(z))", "θ* = argmax L(θ)"],
+    ["Rₙ = √(Σᵢ wᵢ·Δᵢ²)"],
+    ["L(θ) = ∏ p(xᵢ|θ) + ε", "∂L/∂θ ≈ μₜ - γ"],
+    ["κ = (AᵀA + λI)⁻¹Aᵀy"]
   ];
   const formula = formulas[Math.abs(figure.number) % formulas.length];
   return (
     <div className="formula-chart" style={{ "--formula-accent": palette[figure.number % palette.length] } as CSSProperties}>
-      <span>{formula}</span>
-      <small>{isChinese ? "随机符号化约束项" : "stochastic symbolic constraint"}</small>
+      <span>
+        {formula.map((line) => (
+          <b key={line}>{line}</b>
+        ))}
+      </span>
+      <small>({(Math.abs(figure.number) % 9) + 1})</small>
     </div>
   );
 }

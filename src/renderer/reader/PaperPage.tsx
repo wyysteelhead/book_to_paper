@@ -1,13 +1,16 @@
+import type { CSSProperties } from "react";
 import type { PaperFigure, PaperPage as PaperPageType } from "../../common/types";
+import type { FigureHeightMap } from "./measuredPagination";
 import { ChartRenderer } from "./charts/ChartRenderer";
 
 type PaperPageProps = {
   page: PaperPageType;
   documentTitle: string;
   hidePageHeader?: boolean;
+  figureHeights?: FigureHeightMap;
 };
 
-export function PaperPage({ page, documentTitle, hidePageHeader = false }: PaperPageProps): JSX.Element {
+export function PaperPage({ page, documentTitle, hidePageHeader = false, figureHeights }: PaperPageProps): JSX.Element {
   const figures = page.figures ?? (page.figure ? [page.figure] : []);
 
   return (
@@ -27,8 +30,8 @@ export function PaperPage({ page, documentTitle, hidePageHeader = false }: Paper
 
       {page.role === "cover" ? <CoverPage page={page} /> : null}
       {page.role === "abstract" ? <AbstractPage page={page} /> : null}
-      {page.role === "text" ? <TextPage page={page} figures={figures} /> : null}
-      {page.role !== "text" && figures.length > 0 ? <FigureGroup figures={figures} position="full" /> : null}
+      {page.role === "text" ? <TextPage page={page} figures={figures} figureHeights={figureHeights} /> : null}
+      {page.role !== "text" && figures.length > 0 ? <FigureGroup figures={figures} position="full" figureHeights={figureHeights} /> : null}
       {page.role === "formula" ? <FormulaPage page={page} /> : null}
       {page.role === "references" ? <ReferencesPage page={page} /> : null}
 
@@ -69,25 +72,33 @@ function AbstractPage({ page }: { page: PaperPageType }): JSX.Element {
   );
 }
 
-function TextPage({ page, figures }: { page: PaperPageType; figures: PaperFigure[] }): JSX.Element {
-  const markers = new Map(
-    (page.sectionMarkers ?? []).map((marker) => [marker.paragraphIndex, marker.title])
+function TextPage({
+  page,
+  figures,
+  figureHeights
+}: {
+  page: PaperPageType;
+  figures: PaperFigure[];
+  figureHeights?: FigureHeightMap;
+}): JSX.Element {
+  const fragments = fragmentsFromParagraphs(page.id, page.paragraphs ?? [], page.sectionMarkers);
+  const columns = page.columns?.map((column, columnIndex) =>
+    fragmentsFromParagraphs(
+      `${page.id}-column-${columnIndex}`,
+      column.paragraphs,
+      column.sectionMarkers
+    )
   );
-  const fragments = (page.paragraphs ?? []).map((paragraph, index) => ({
-    id: `${page.id}-${index}`,
-    marker: markers.get(index),
-    paragraph
-  }));
 
-  if (page.templateId === "double-column-conference" && figures.length > 0) {
-    return <DoubleColumnTextPage page={page} fragments={fragments} figures={figures} />;
+  if (page.templateId === "double-column-conference") {
+    return <DoubleColumnTextPage page={page} fragments={fragments} figures={figures} columns={columns} figureHeights={figureHeights} />;
   }
 
   const { topFigures, bottomFigures } = splitSingleColumnFigures(figures);
 
   return (
     <section className="paper-section" data-page-content="text">
-      {topFigures.length > 0 ? <FigureGroup figures={topFigures} position="top" /> : null}
+      {topFigures.length > 0 ? <FigureGroup figures={topFigures} position="top" figureHeights={figureHeights} /> : null}
       <div className="paper-body">
         {fragments.map(({ id, marker, paragraph }, index) => (
           <FragmentWithSection
@@ -98,7 +109,7 @@ function TextPage({ page, figures }: { page: PaperPageType; figures: PaperFigure
           />
         ))}
       </div>
-      {bottomFigures.length > 0 ? <FigureGroup figures={bottomFigures} position="bottom" /> : null}
+      {bottomFigures.length > 0 ? <FigureGroup figures={bottomFigures} position="bottom" figureHeights={figureHeights} /> : null}
     </section>
   );
 }
@@ -109,51 +120,99 @@ type TextFragment = {
   paragraph: string;
 };
 
+function fragmentsFromParagraphs(
+  idPrefix: string,
+  paragraphs: string[],
+  sectionMarkers?: PaperPageType["sectionMarkers"]
+): TextFragment[] {
+  const markers = new Map(
+    (sectionMarkers ?? []).map((marker) => [marker.paragraphIndex, marker.title])
+  );
+  return paragraphs.map((paragraph, index) => ({
+    id: `${idPrefix}-${index}`,
+    marker: markers.get(index),
+    paragraph
+  }));
+}
+
 function DoubleColumnTextPage({
   page,
   fragments,
-  figures
+  figures,
+  columns,
+  figureHeights
 }: {
   page: PaperPageType;
   fragments: TextFragment[];
   figures: PaperFigure[];
+  columns?: TextFragment[][];
+  figureHeights?: FigureHeightMap;
 }): JSX.Element {
   const spanFigures = figures.filter(isSpanFigure);
   const columnFigures = figures.filter((figure) => !isSpanFigure(figure));
+  const placedColumnFigures = columns && columnFigures.length === 1
+    ? splitPlacedColumnFigures(columnFigures[0], page.figurePlacement)
+    : {
+        leftTop: columnFigures[0],
+        rightBottom: columnFigures[1],
+        leftBottom: columnFigures[2],
+        rightTail: columnFigures[3]
+      };
   const leftFigureLoad = figureColumnLoad([columnFigures[0], columnFigures[2]]);
   const rightFigureLoad = figureColumnLoad([columnFigures[1], columnFigures[3]]);
-  const { leftFragments, rightFragments } = splitFragmentsForColumns(
-    fragments,
-    leftFigureLoad,
-    rightFigureLoad
-  );
+  const { leftFragments, rightFragments } = columns
+    ? {
+        leftFragments: columns[0] ?? [],
+        rightFragments: columns[1] ?? []
+      }
+    : splitFragmentsForColumns(
+        fragments,
+        leftFigureLoad,
+        rightFigureLoad
+      );
 
   return (
     <section className="paper-section paper-flow-section" data-page-content="text">
       {spanFigures.slice(0, 1).map((figure) => (
         <div key={figure.id} className="paper-flow-span">
-          <FigureBlock figure={figure} />
+          <FigureBlock figure={figure} figureHeights={figureHeights} />
         </div>
       ))}
       <div className="paper-flow-grid" data-column-figure-count={columnFigures.length}>
         <div className="paper-flow-column">
-          {columnFigures[0] ? <FigureBlock figure={columnFigures[0]} /> : null}
+          {placedColumnFigures.leftTop ? <FigureBlock figure={placedColumnFigures.leftTop} figureHeights={figureHeights} /> : null}
           <TextFragments fragments={leftFragments} />
-          {columnFigures[2] ? <FigureBlock figure={columnFigures[2]} /> : null}
+          {placedColumnFigures.leftBottom ? <FigureBlock figure={placedColumnFigures.leftBottom} figureHeights={figureHeights} /> : null}
         </div>
         <div className="paper-flow-column">
+          {placedColumnFigures.rightTop ? <FigureBlock figure={placedColumnFigures.rightTop} figureHeights={figureHeights} /> : null}
           <TextFragments fragments={rightFragments} />
-          {columnFigures[1] ? <FigureBlock figure={columnFigures[1]} /> : null}
-          {columnFigures[3] ? <FigureBlock figure={columnFigures[3]} /> : null}
+          {placedColumnFigures.rightBottom ? <FigureBlock figure={placedColumnFigures.rightBottom} figureHeights={figureHeights} /> : null}
+          {placedColumnFigures.rightTail ? <FigureBlock figure={placedColumnFigures.rightTail} figureHeights={figureHeights} /> : null}
         </div>
       </div>
       {spanFigures.slice(1).map((figure) => (
         <div key={figure.id} className="paper-flow-span paper-flow-span-late">
-          <FigureBlock figure={figure} />
+          <FigureBlock figure={figure} figureHeights={figureHeights} />
         </div>
       ))}
     </section>
   );
+}
+
+function splitPlacedColumnFigures(
+  figure: PaperFigure,
+  placement: PaperPageType["figurePlacement"]
+): {
+  leftTop?: PaperFigure;
+  leftBottom?: PaperFigure;
+  rightTop?: PaperFigure;
+  rightBottom?: PaperFigure;
+  rightTail?: PaperFigure;
+} {
+  return placement === "right"
+    ? { rightTop: figure }
+    : { leftTop: figure };
 }
 
 function TextFragments({ fragments }: { fragments: TextFragment[] }): JSX.Element {
@@ -174,17 +233,27 @@ function splitFragmentsForColumns(
   leftFragments: TextFragment[];
   rightFragments: TextFragment[];
 } {
-  const totalLength = fragments.reduce((sum, fragment) => sum + fragment.paragraph.length, 0);
-  const targetRatio = clamp(0.5 - (leftFigureLoad - rightFigureLoad) * 0.08, 0.34, 0.62);
-  const targetLength = totalLength * targetRatio;
-  let runningLength = 0;
-  let splitIndex = Math.max(1, Math.ceil(fragments.length / 2));
+  if (fragments.length <= 1) {
+    return {
+      leftFragments: fragments,
+      rightFragments: []
+    };
+  }
 
-  for (let index = 0; index < fragments.length; index += 1) {
-    runningLength += fragments[index].paragraph.length;
-    if (runningLength >= targetLength) {
-      splitIndex = Math.min(Math.max(index + 1, 1), Math.max(fragments.length - 1, 1));
-      break;
+  const heights = fragments.map(estimateDoubleColumnFragmentHeight);
+  const totalHeight = heights.reduce((sum, height) => sum + height, 0);
+  const targetRatio = clamp(0.5 - (leftFigureLoad - rightFigureLoad) * 0.08, 0.34, 0.62);
+  const targetHeight = totalHeight * targetRatio;
+  let runningHeight = 0;
+  let splitIndex = 1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (let index = 0; index < fragments.length - 1; index += 1) {
+    runningHeight += heights[index];
+    const distance = Math.abs(runningHeight - targetHeight);
+    if (distance <= bestDistance) {
+      bestDistance = distance;
+      splitIndex = index + 1;
     }
   }
 
@@ -192,6 +261,16 @@ function splitFragmentsForColumns(
     leftFragments: fragments.slice(0, splitIndex),
     rightFragments: fragments.slice(splitIndex)
   };
+}
+
+function estimateDoubleColumnFragmentHeight(fragment: TextFragment): number {
+  const text = fragment.paragraph.trim();
+  const chineseChars = text.match(/[\u4e00-\u9fa5]/g)?.length ?? 0;
+  const weightedLength = text.length + chineseChars * 0.55;
+  const lines = Math.max(1, Math.ceil(weightedLength / 40));
+  const paragraphGap = text.length > 90 ? 8 : 6;
+  const markerHeight = fragment.marker ? 30 : 0;
+  return lines * 17.6 + paragraphGap + markerHeight;
 }
 
 function figureColumnLoad(figures: Array<PaperFigure | undefined>): number {
@@ -284,31 +363,78 @@ function ReferencesPage({ page }: { page: PaperPageType }): JSX.Element {
 
 function FigureGroup({
   figures,
-  position
+  position,
+  figureHeights
 }: {
   figures: PaperFigure[];
   position: "top" | "bottom" | "full";
+  figureHeights?: FigureHeightMap;
 }): JSX.Element {
   return (
     <div className={`inline-figures figure-position-${position}`} data-figure-count={figures.length}>
       {figures.map((figure) => (
-        <FigureBlock key={figure.id} figure={figure} />
+        <FigureBlock key={figure.id} figure={figure} figureHeights={figureHeights} />
       ))}
     </div>
   );
 }
 
-function FigureBlock({ figure }: { figure: PaperFigure }): JSX.Element {
+export function FigureBlock({
+  figure,
+  figureHeights
+}: {
+  figure: PaperFigure;
+  figureHeights?: FigureHeightMap;
+}): JSX.Element {
+  const measuredHeight = figureHeights?.[figure.id];
+  const slotHeight = measuredHeight ? measuredFigureSlotHeight(figure, measuredHeight) : null;
+  const style = measuredHeight
+    ? ({ "--figure-slot-height": `${slotHeight}px` } as CSSProperties)
+    : undefined;
   return (
     <section
       className={`figure-block layout-${figure.layout} chart-${figure.chartType}`}
       data-chart-type={figure.chartType}
       data-figure-id={figure.id}
+      data-figure-size={figureSize(figure)}
       data-layout={figure.layout}
+      style={style}
     >
       <h2>{figure.title}</h2>
       <ChartRenderer figure={figure} />
       <p className="caption">{figure.caption}</p>
     </section>
   );
+}
+
+function measuredFigureSlotHeight(figure: PaperFigure, measuredHeight: number): number {
+  const template = figure.layout === "single_full_width" ? "single" : "double";
+  const fallback = fallbackFigureSlotHeight(figure, template);
+  const min = Math.max(template === "single" ? 160 : 136, fallback - 38);
+  const max = Math.min(template === "single" ? 380 : 326, fallback + 46);
+  return Math.ceil(Math.min(max, Math.max(min, measuredHeight)));
+}
+
+function fallbackFigureSlotHeight(figure: PaperFigure, template: "single" | "double"): number {
+  const size = figureSize(figure);
+  if (template === "single") {
+    if (size === "compact") return 220;
+    if (size === "tall") return 350;
+    return 286;
+  }
+  if (size === "compact") return 176;
+  if (size === "tall") return 306;
+  return 246;
+}
+
+function figureSize(figure: PaperFigure): "compact" | "regular" | "tall" {
+  const data = figure.data;
+  if (figure.chartType === "formula") return "compact";
+  if (figure.chartType === "plain_table" || figure.chartType === "table") return "tall";
+  if (figure.chartType === "sankey" || figure.chartType === "graph" || figure.chartType === "network") return "tall";
+  if (figure.chartType === "multi_panel" || figure.chartType === "flow") return "tall";
+  if (figure.chartType === "candlestick" || figure.chartType === "gantt") return "tall";
+  if (data?.kind === "series" && data.labels.length <= 5) return "compact";
+  if (data?.kind === "ranked" && data.labels.length <= 5) return "compact";
+  return "regular";
 }
