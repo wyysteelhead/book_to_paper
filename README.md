@@ -92,7 +92,7 @@ Book2Paper 可以把本地小说转换成论文风格的阅读界面，支持 `.
 
 请前往 Release 页面下载：
 
-[Book2Paper Release](https://github.com/wyysteelhead/book_to_paper/releases)
+[Book2Paper Release](https://github.com/wyysteelhead/book_to_paper/releases) （为了彻底的伪装，软件名称为Document Lab）
 
 macOS 用户下载 `.dmg`，Windows 用户下载 `.exe`。
 
