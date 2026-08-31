@@ -17,9 +17,10 @@ type ReaderViewProps = {
   document: PaperDocument;
 };
 
-const PAGE_RENDER_BUFFER = 4;
+const PAGE_RENDER_BUFFER_BEFORE = 3;
+const PAGE_RENDER_BUFFER_AFTER = 5;
 const PAGE_STEP = 1084;
-const LAYOUT_CACHE_VERSION = 3;
+const LAYOUT_CACHE_VERSION = 4;
 
 type PageContextMenu = {
   pageIndex: number;
@@ -40,10 +41,14 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
   const [figureHeights, setFigureHeights] = useState<FigureHeightMap>(() => document.layoutCache?.figureHeights ?? {});
   const [isMeasuringFigures, setIsMeasuringFigures] = useState(() => !cachedLayoutDocument(document) && collectMeasuredFigures(document).length > 0);
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
+  const [renderWindowCenter, setRenderWindowCenter] = useState(0);
   const [renderAllPages, setRenderAllPages] = useState(false);
   const lastSavedPositionAt = useRef(0);
   const currentPageIndexRef = useRef(0);
   const hasRestoredInitialPosition = useRef(false);
+  const toolbarRef = useRef<HTMLElement | null>(null);
+  const toolbarVisibleRef = useRef(true);
+  const lastToolbarScrollY = useRef(0);
   const paperStackRef = useRef<HTMLDivElement | null>(null);
   const figureMeasureRef = useRef<HTMLDivElement | null>(null);
   const bookmarkCloseTimer = useRef<number | null>(null);
@@ -69,16 +74,19 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
   const visibleDocument = layoutDocument;
   const bookmarks = readingBookmarks[visibleDocument.id] ?? [];
   const currentPageBookmark = bookmarks.find((bookmark) => bookmark.pageIndex === currentPageIndex) ?? null;
-  const renderedPageStart = renderAllPages ? 0 : Math.max(0, currentPageIndex - PAGE_RENDER_BUFFER);
+  const renderedPageStart = renderAllPages ? 0 : Math.max(0, renderWindowCenter - PAGE_RENDER_BUFFER_BEFORE);
   const renderedPageEnd = renderAllPages
     ? visibleDocument.pages.length
-    : Math.min(visibleDocument.pages.length, currentPageIndex + PAGE_RENDER_BUFFER + 1);
+    : Math.min(visibleDocument.pages.length, renderWindowCenter + PAGE_RENDER_BUFFER_AFTER + 1);
   const renderedPages = visibleDocument.pages.slice(renderedPageStart, renderedPageEnd);
   const topSpacerHeight = renderedPageStart > 0 ? renderedPageStart * PAGE_STEP - 28 : 0;
   const bottomSpacerPageCount = Math.max(0, visibleDocument.pages.length - renderedPageEnd);
   const bottomSpacerHeight = bottomSpacerPageCount > 0 ? bottomSpacerPageCount * PAGE_STEP - 28 : 0;
+  const pendingPageIndex = currentPageIndexRef.current;
+  const isRenderWindowCatchingUp =
+    !renderAllPages && (pendingPageIndex < renderedPageStart || pendingPageIndex >= renderedPageEnd);
 
-  currentPageIndexRef.current = currentPageIndex;
+  toolbarVisibleRef.current = toolbarVisible;
 
   const openBookmarks = (): void => {
     if (bookmarkCloseTimer.current) {
@@ -96,6 +104,13 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
     }, 120);
   };
 
+  const showToolbarImmediately = (): void => {
+    if (toolbarVisibleRef.current) return;
+    toolbarVisibleRef.current = true;
+    toolbarRef.current?.classList.remove("hidden");
+    setToolbarVisible(true);
+  };
+
   useLayoutEffect(() => {
     lastSavedPositionAt.current = 0;
     hasRestoredInitialPosition.current = false;
@@ -107,7 +122,7 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
     } else {
       setFigureHeights({});
       const hasFigures = collectMeasuredFigures(document).length > 0;
-      setIsMeasuringFigures(hasFigures);
+      setIsMeasuringFigures(false);
       setLayoutDocument(document);
       if (!hasFigures) {
         saveDocumentLayoutCache(document.id, {
@@ -116,11 +131,14 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
           figureHeights: {},
           createdAt: Date.now()
         });
+      } else {
+        window.requestAnimationFrame(() => setIsMeasuringFigures(true));
       }
     }
     const restoredIndex = readingPositions[document.id]?.pageIndex ?? 0;
     currentPageIndexRef.current = restoredIndex;
     setCurrentPageIndex(restoredIndex);
+    setRenderWindowCenter(restoredIndex);
   }, [document]);
 
   useLayoutEffect(() => {
@@ -201,7 +219,6 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
       );
       if (nextIndex !== currentPageIndexRef.current) {
         currentPageIndexRef.current = nextIndex;
-        setCurrentPageIndex(nextIndex);
       }
       if (Date.now() - lastSavedPositionAt.current > 1200) {
         lastSavedPositionAt.current = Date.now();
@@ -212,29 +229,99 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
         });
       }
     };
+    const settleRenderWindow = () => {
+      setRenderWindowCenter((center) => {
+        const pageIndex = currentPageIndexRef.current;
+        const start = Math.max(0, center - PAGE_RENDER_BUFFER_BEFORE);
+        const end = Math.min(visibleDocument.pages.length, center + PAGE_RENDER_BUFFER_AFTER + 1);
+        if (pageIndex >= start + 1 && pageIndex < end - 2) return center;
+        return pageIndex;
+      });
+    };
+    let settleTimer: number | null = null;
+    const scheduleRenderWindowSettle = () => {
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      const pageIndex = currentPageIndexRef.current;
+      const start = Math.max(0, renderWindowCenter - PAGE_RENDER_BUFFER_BEFORE);
+      const end = Math.min(visibleDocument.pages.length, renderWindowCenter + PAGE_RENDER_BUFFER_AFTER + 1);
+      if (pageIndex < start || pageIndex >= end) {
+        setRenderWindowCenter(pageIndex);
+        return;
+      }
+      settleTimer = window.setTimeout(settleRenderWindow, 160);
+    };
+    const handleScroll = () => {
+      updateCurrentPage();
+      scheduleRenderWindowSettle();
+    };
 
     updateCurrentPage();
-    window.addEventListener("scroll", updateCurrentPage, { passive: true });
-    window.addEventListener("resize", updateCurrentPage);
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    window.addEventListener("resize", handleScroll);
     return () => {
-      window.removeEventListener("scroll", updateCurrentPage);
-      window.removeEventListener("resize", updateCurrentPage);
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      window.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("resize", handleScroll);
     };
-  }, [renderAllPages, saveReadingPosition, visibleDocument.id, visibleDocument.pages.length]);
+  }, [renderAllPages, renderWindowCenter, saveReadingPosition, visibleDocument.id, visibleDocument.pages.length]);
 
   useEffect(() => {
+    const setToolbarVisibility = (visible: boolean): void => {
+      if (toolbarVisibleRef.current === visible) return;
+      toolbarVisibleRef.current = visible;
+      toolbarRef.current?.classList.toggle("hidden", autoHideToolbar && !visible);
+      setToolbarVisible(visible);
+    };
+
     if (!autoHideToolbar) {
-      setToolbarVisible(true);
+      setToolbarVisibility(true);
       return;
     }
 
-    setToolbarVisible(true);
-    const updateToolbarVisibility = () => {
-      setToolbarVisible(window.scrollY < 96);
+    setToolbarVisibility(true);
+    lastToolbarScrollY.current = window.scrollY;
+    const updateToolbarFromScroll = (): void => {
+      const nextScrollY = window.scrollY;
+      const delta = nextScrollY - lastToolbarScrollY.current;
+      lastToolbarScrollY.current = nextScrollY;
+
+      if (nextScrollY < 96 || delta < 0) {
+        setToolbarVisibility(true);
+        return;
+      }
+
+      if (delta > 0) {
+        setToolbarVisibility(false);
+      }
+    };
+    const updateToolbarFromWheel = (event: WheelEvent): void => {
+      if (window.scrollY < 96 || event.deltaY < 0) {
+        setToolbarVisibility(true);
+        return;
+      }
+      if (event.deltaY > 0) {
+        setToolbarVisibility(false);
+      }
+    };
+    const updateToolbarFromPointer = (event: PointerEvent): void => {
+      if (window.scrollY < 96) {
+        setToolbarVisibility(true);
+        return;
+      }
+
+      if (event.clientY <= 140) {
+        setToolbarVisibility(true);
+      }
     };
 
-    window.addEventListener("scroll", updateToolbarVisibility, { passive: true });
-    return () => window.removeEventListener("scroll", updateToolbarVisibility);
+    window.addEventListener("scroll", updateToolbarFromScroll, { passive: true });
+    window.addEventListener("wheel", updateToolbarFromWheel, { passive: true });
+    window.addEventListener("pointermove", updateToolbarFromPointer, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", updateToolbarFromScroll);
+      window.removeEventListener("wheel", updateToolbarFromWheel);
+      window.removeEventListener("pointermove", updateToolbarFromPointer);
+    };
   }, [autoHideToolbar, visibleDocument.id]);
 
   useEffect(() => {
@@ -242,12 +329,12 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
       if (bookmarkCloseTimer.current) window.clearTimeout(bookmarkCloseTimer.current);
       if (!hasRestoredInitialPosition.current) return;
       saveReadingPosition(visibleDocument.id, {
-        pageIndex: currentPageIndex,
+        pageIndex: currentPageIndexRef.current,
         scrollTop: window.scrollY,
         updatedAt: Date.now()
       });
     };
-  }, [currentPageIndex, saveReadingPosition, visibleDocument.id]);
+  }, [saveReadingPosition, visibleDocument.id]);
 
   useEffect(() => {
     if (!pageContextMenu) return;
@@ -268,12 +355,13 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
   }, [pageContextMenu]);
 
   const simulateVisitor = (): void => {
+    const pageIndex = currentPageIndexRef.current;
     savePosition({
-      pageIndex: currentPageIndex,
+      pageIndex,
       scrollTop: window.scrollY,
       updatedAt: Date.now()
     });
-    const target = selectAcademicTarget(visibleDocument, currentPageIndex);
+    const target = selectAcademicTarget(visibleDocument, pageIndex);
     scrollToPageIndex(target.index);
     window.setTimeout(() => setRestoreAvailable(true), 1800);
   };
@@ -285,15 +373,17 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
   };
 
   const createBookmark = (): void => {
-    if (currentPageBookmark) {
+    const pageIndex = currentPageIndexRef.current;
+    const existingBookmark = bookmarks.find((bookmark) => bookmark.pageIndex === pageIndex) ?? null;
+    if (existingBookmark) {
       setBookmarksOpen(true);
       return;
     }
-    const page = visibleDocument.pages[currentPageIndex];
+    const page = visibleDocument.pages[pageIndex];
     addReadingBookmark(visibleDocument.id, {
       id: `bookmark-${Date.now()}`,
-      pageIndex: currentPageIndex,
-      title: page?.sectionTitle ?? page?.title ?? `${visibleDocument.language === "zh" ? "第" : "Page"} ${currentPageIndex + 1}`,
+      pageIndex,
+      title: page?.sectionTitle ?? page?.title ?? `${visibleDocument.language === "zh" ? "第" : "Page"} ${pageIndex + 1}`,
       createdAt: Date.now()
     });
   };
@@ -353,6 +443,7 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
     const nextPageIndex = Math.max(0, Math.min(nextDocument.pages.length - 1, pageIndex));
     currentPageIndexRef.current = nextPageIndex;
     setCurrentPageIndex(nextPageIndex);
+    setRenderWindowCenter(nextPageIndex);
     setReflowConfirmPageIndex(null);
     window.requestAnimationFrame(() => {
       const page = nextDocument.pages[nextPageIndex];
@@ -374,6 +465,7 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
     if (!page) return;
     currentPageIndexRef.current = pageIndex;
     setCurrentPageIndex(pageIndex);
+    setRenderWindowCenter(pageIndex);
     window.requestAnimationFrame(() => {
       const node = window.document.querySelector<HTMLElement>(`[data-page-id="${page.id}"]`);
       if (node) {
@@ -391,14 +483,15 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
       {autoHideToolbar ? (
         <div
           className="reader-toolbar-hover-zone"
-          onMouseEnter={() => setToolbarVisible(true)}
           aria-hidden="true"
+          onPointerEnter={showToolbarImmediately}
         />
       ) : null}
       <header
+        ref={toolbarRef}
         className={`reader-toolbar ${autoHideToolbar && !toolbarVisible ? "hidden" : ""}`}
         onMouseEnter={() => {
-          if (autoHideToolbar) setToolbarVisible(true);
+          if (autoHideToolbar) showToolbarImmediately();
         }}
       >
         <button className="icon-button" onClick={closeDocument} aria-label="返回书库">
@@ -419,15 +512,7 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
         >
           <ListTree size={17} />
         </button>
-        <div
-          className="bookmark-toolbar-popover"
-          onMouseEnter={openBookmarks}
-          onMouseLeave={scheduleCloseBookmarks}
-          onFocus={openBookmarks}
-          onBlur={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget)) scheduleCloseBookmarks();
-          }}
-        >
+        <div className="bookmark-toolbar-popover">
           <button
             className={`icon-button subtle bookmark-action ${currentPageBookmark ? "active" : ""}`}
             onClick={createBookmark}
@@ -484,14 +569,17 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
       {exportStatus ? <div className="export-status">{exportStatus}</div> : null}
 
       {isMeasuringFigures ? <LayoutProgress /> : null}
+      {isRenderWindowCatchingUp ? <PageWindowProgress /> : null}
 
       <div
-        className={`paper-stack ${isMeasuringFigures ? "layout-measuring" : ""}`}
+        className="paper-stack"
         ref={paperStackRef}
         onContextMenu={openPageContextMenu}
       >
         {topSpacerHeight > 0 ? (
-          <div className="paper-stack-spacer" style={{ height: topSpacerHeight }} aria-hidden="true" />
+          <div className="paper-stack-spacer" style={{ height: topSpacerHeight }}>
+            {isRenderWindowCatchingUp && pendingPageIndex < renderedPageStart ? <PageWindowProgress compact /> : null}
+          </div>
         ) : null}
         {renderedPages.map((page) => (
           <PaperPage
@@ -503,11 +591,13 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
             />
         ))}
         {bottomSpacerHeight > 0 ? (
-          <div className="paper-stack-spacer" style={{ height: bottomSpacerHeight }} aria-hidden="true" />
+          <div className="paper-stack-spacer" style={{ height: bottomSpacerHeight }}>
+            {isRenderWindowCatchingUp && pendingPageIndex >= renderedPageEnd ? <PageWindowProgress compact /> : null}
+          </div>
         ) : null}
       </div>
 
-      <ChartMeasureHost documentData={visibleDocument} measureRef={figureMeasureRef} />
+      {isMeasuringFigures ? <ChartMeasureHost documentData={visibleDocument} measureRef={figureMeasureRef} /> : null}
 
       {pageContextMenu ? (
         <div
@@ -633,6 +723,7 @@ export function ReaderView({ document }: ReaderViewProps): JSX.Element {
               </button>
             </header>
             <p>{visibleDocument.sourceTitle}</p>
+            <p className="redaction-note">这些词只会从统计与图表中排除，正文阅读内容保持不变。</p>
             <RedactionTermEditor
               value={documentRedactions[visibleDocument.bookId] ?? ""}
               onChange={(value) => setDocumentRedactionInput(visibleDocument.bookId, value)}
@@ -790,6 +881,15 @@ function LayoutProgress(): JSX.Element {
         <span style={{ width: "90%" }} />
       </div>
       <small>正在测量图表高度并重新分页</small>
+    </div>
+  );
+}
+
+function PageWindowProgress({ compact = false }: { compact?: boolean }): JSX.Element {
+  return (
+    <div className={compact ? "page-window-progress compact" : "page-window-progress"} aria-live="polite">
+      <span />
+      <small>正在加载页面</small>
     </div>
   );
 }

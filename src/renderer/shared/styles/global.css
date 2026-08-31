@@ -388,6 +388,14 @@ p {
   font-weight: 700;
 }
 
+.import-redaction-field small,
+.redaction-note {
+  color: #756f65;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
 .import-redaction-field textarea {
   resize: vertical;
   padding: 10px 12px;
@@ -489,6 +497,13 @@ p {
   color: #625d54;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.redaction-panel .redaction-note {
+  overflow: visible;
+  margin-top: -4px;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .redaction-actions {
@@ -685,6 +700,54 @@ p {
   border-radius: 6px;
   color: #3d5738;
   font-size: 14px;
+}
+
+.opening-document-overlay {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(243, 242, 238, 0.62);
+  backdrop-filter: blur(4px);
+}
+
+.opening-document-panel {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  width: min(320px, calc(100vw - 48px));
+  padding: 22px;
+  border: 1px solid #cfc8bc;
+  border-radius: 8px;
+  background: rgba(255, 253, 250, 0.96);
+  box-shadow: 0 18px 54px rgba(31, 29, 24, 0.16);
+  color: #2c2a25;
+}
+
+.opening-document-panel small {
+  max-width: 100%;
+  overflow: hidden;
+  color: #6d675c;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loading-spinner,
+.page-window-progress span {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #d3ccc0;
+  border-top-color: #4f7b49;
+  border-radius: 999px;
+  animation: spin 720ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .status-header {
@@ -1089,7 +1152,7 @@ p {
   background: rgba(243, 242, 238, 0.94);
   backdrop-filter: blur(12px);
   transform: translateY(0);
-  transition: transform 180ms ease, opacity 180ms ease;
+  transition: transform 90ms ease-out, opacity 90ms ease-out;
 }
 
 .reader-view.toolbar-auto-hide .reader-toolbar.hidden {
@@ -1104,7 +1167,7 @@ p {
   top: 0;
   right: 0;
   left: 0;
-  height: 48px;
+  height: 140px;
 }
 
 .export-status {
@@ -1260,9 +1323,36 @@ p {
 }
 
 .paper-stack-spacer {
+  display: grid;
+  align-items: start;
+  justify-items: center;
   width: 816px;
   min-height: 0;
   pointer-events: none;
+}
+
+.page-window-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin: 8px auto;
+  padding: 8px 12px;
+  border: 1px solid #d7d2c8;
+  border-radius: 999px;
+  background: rgba(255, 253, 250, 0.94);
+  box-shadow: 0 8px 22px rgba(31, 29, 24, 0.1);
+  color: #625d54;
+  font-size: 12px;
+}
+
+.page-window-progress.compact {
+  position: sticky;
+  top: 88px;
+}
+
+.page-window-progress span {
+  width: 16px;
+  height: 16px;
 }
 
 .role-text .paper-section {
@@ -1359,6 +1449,16 @@ p {
   font-size: var(--paper-title-size, 15px);
   font-weight: var(--paper-title-weight, 800);
   line-height: 1.22;
+}
+
+.source-chapter-title {
+  break-after: avoid;
+  margin: 0 0 8px;
+  color: #6d675c;
+  font-family: "Times New Roman", "Songti SC", serif;
+  font-size: max(11px, calc(var(--paper-title-size, 15px) - 2px));
+  font-weight: 700;
+  line-height: 1.25;
 }
 
 .text-fragment {

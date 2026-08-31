@@ -12,6 +12,7 @@ export function LibraryView(): JSX.Element {
   const [activeTab, setActiveTab] = useState<LibraryTab>("books");
   const [isImportPanelOpen, setIsImportPanelOpen] = useState(false);
   const [redactionDocumentId, setRedactionDocumentId] = useState<string | null>(null);
+  const [openingDocumentTitle, setOpeningDocumentTitle] = useState<string | null>(null);
   const documents = useLibraryStore((state) => state.documents);
   const templateId = useLibraryStore((state) => state.templateId);
   const isImporting = useLibraryStore((state) => state.isImporting);
@@ -45,6 +46,11 @@ export function LibraryView(): JSX.Element {
   async function startImport() {
     await importBook();
     setIsImportPanelOpen(false);
+  }
+
+  function openDocumentAfterClick(document: Parameters<typeof openDocument>[0]): void {
+    setOpeningDocumentTitle(document.title);
+    window.requestAnimationFrame(() => openDocument(document));
   }
 
   return (
@@ -92,12 +98,12 @@ export function LibraryView(): JSX.Element {
                 <div
                   key={document.id}
                   className="book-row"
-                  onClick={() => openDocument(document)}
+                  onClick={() => openDocumentAfterClick(document)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(event) => {
                     if (event.target !== event.currentTarget) return;
-                    if (event.key === "Enter" || event.key === " ") openDocument(document);
+                    if (event.key === "Enter" || event.key === " ") openDocumentAfterClick(document);
                   }}
                 >
                   <FileText size={22} />
@@ -334,6 +340,7 @@ export function LibraryView(): JSX.Element {
             </button>
             <label className="import-redaction-field">
               本次导入屏蔽词
+              <small>屏蔽词只会从统计与图表中排除，不会修改或隐藏原书正文。</small>
               <RedactionTermEditor
                 value={pendingRedactionInput}
                 onChange={setPendingRedactionInput}
@@ -358,6 +365,7 @@ export function LibraryView(): JSX.Element {
               </button>
             </header>
             <p>{redactionDocument.title}</p>
+            <p className="redaction-note">这些词只会从统计与图表中排除，正文阅读内容保持不变。</p>
             <RedactionTermEditor
               value={documentRedactions[redactionDocument.bookId] ?? ""}
               onChange={(value) => setDocumentRedactionInput(redactionDocument.bookId, value)}
@@ -380,6 +388,16 @@ export function LibraryView(): JSX.Element {
               </button>
             </div>
           </section>
+        </div>
+      ) : null}
+
+      {openingDocumentTitle ? (
+        <div className="opening-document-overlay" role="status" aria-live="polite">
+          <div className="opening-document-panel">
+            <span className="loading-spinner" />
+            <strong>正在打开文章</strong>
+            <small>{openingDocumentTitle}</small>
+          </div>
         </div>
       ) : null}
     </section>
