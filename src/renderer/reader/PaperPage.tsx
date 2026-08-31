@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { memo, type CSSProperties } from "react";
 import type { PaperFigure, PaperPage as PaperPageType } from "../../common/types";
 import type { FigureHeightMap } from "./measuredPagination";
 import { ChartRenderer } from "./charts/ChartRenderer";
@@ -10,7 +10,12 @@ type PaperPageProps = {
   figureHeights?: FigureHeightMap;
 };
 
-export function PaperPage({ page, documentTitle, hidePageHeader = false, figureHeights }: PaperPageProps): JSX.Element {
+export const PaperPage = memo(function PaperPage({
+  page,
+  documentTitle,
+  hidePageHeader = false,
+  figureHeights
+}: PaperPageProps): JSX.Element {
   const figures = page.figures ?? (page.figure ? [page.figure] : []);
 
   return (
@@ -41,7 +46,7 @@ export function PaperPage({ page, documentTitle, hidePageHeader = false, figureH
       </footer>
     </article>
   );
-}
+});
 
 function CoverPage({ page }: { page: PaperPageType }): JSX.Element {
   return (
@@ -115,12 +120,18 @@ function TextPage({
   figures: PaperFigure[];
   figureHeights?: FigureHeightMap;
 }): JSX.Element {
-  const fragments = fragmentsFromParagraphs(page.id, page.paragraphs ?? [], page.sectionMarkers);
+  const fragments = fragmentsFromParagraphs(
+    page.id,
+    page.paragraphs ?? [],
+    page.sectionMarkers,
+    page.sourceChapterMarkers
+  );
   const columns = page.columns?.map((column, columnIndex) =>
     fragmentsFromParagraphs(
       `${page.id}-column-${columnIndex}`,
       column.paragraphs,
-      column.sectionMarkers
+      column.sectionMarkers,
+      column.sourceChapterMarkers
     )
   );
 
@@ -134,11 +145,12 @@ function TextPage({
     <section className="paper-section" data-page-content="text">
       {topFigures.length > 0 ? <FigureGroup figures={topFigures} position="top" figureHeights={figureHeights} /> : null}
       <div className="paper-body">
-        {fragments.map(({ id, marker, paragraph }, index) => (
+        {fragments.map(({ id, sectionMarker, sourceChapterMarker, paragraph }, index) => (
           <FragmentWithSection
             key={id}
             fragmentIndex={index}
-            marker={marker}
+            sectionMarker={sectionMarker}
+            sourceChapterMarker={sourceChapterMarker}
             paragraph={paragraph}
           />
         ))}
@@ -150,21 +162,27 @@ function TextPage({
 
 type TextFragment = {
   id: string;
-  marker?: string;
+  sectionMarker?: string;
+  sourceChapterMarker?: string;
   paragraph: string;
 };
 
 function fragmentsFromParagraphs(
   idPrefix: string,
   paragraphs: string[],
-  sectionMarkers?: PaperPageType["sectionMarkers"]
+  sectionMarkers?: PaperPageType["sectionMarkers"],
+  sourceChapterMarkers?: PaperPageType["sourceChapterMarkers"]
 ): TextFragment[] {
-  const markers = new Map(
+  const sectionMarkerMap = new Map(
     (sectionMarkers ?? []).map((marker) => [marker.paragraphIndex, marker.title])
+  );
+  const sourceChapterMarkerMap = new Map(
+    (sourceChapterMarkers ?? []).map((marker) => [marker.paragraphIndex, marker.title])
   );
   return paragraphs.map((paragraph, index) => ({
     id: `${idPrefix}-${index}`,
-    marker: markers.get(index),
+    sectionMarker: sectionMarkerMap.get(index),
+    sourceChapterMarker: sourceChapterMarkerMap.get(index),
     paragraph
   }));
 }
@@ -252,8 +270,14 @@ function splitPlacedColumnFigures(
 function TextFragments({ fragments }: { fragments: TextFragment[] }): JSX.Element {
   return (
     <>
-      {fragments.map(({ id, marker, paragraph }, index) => (
-        <FragmentWithSection key={id} fragmentIndex={index} marker={marker} paragraph={paragraph} />
+      {fragments.map(({ id, sectionMarker, sourceChapterMarker, paragraph }, index) => (
+        <FragmentWithSection
+          key={id}
+          fragmentIndex={index}
+          sectionMarker={sectionMarker}
+          sourceChapterMarker={sourceChapterMarker}
+          paragraph={paragraph}
+        />
       ))}
     </>
   );
@@ -303,7 +327,7 @@ function estimateDoubleColumnFragmentHeight(fragment: TextFragment): number {
   const weightedLength = text.length + chineseChars * 0.55;
   const lines = Math.max(1, Math.ceil(weightedLength / 40));
   const paragraphGap = text.length > 90 ? 8 : 6;
-  const markerHeight = fragment.marker ? 30 : 0;
+  const markerHeight = (fragment.sectionMarker ? 30 : 0) + (fragment.sourceChapterMarker ? 22 : 0);
   return lines * 17.6 + paragraphGap + markerHeight;
 }
 
@@ -344,17 +368,20 @@ function isSpanFigure(figure: PaperFigure): boolean {
 
 function FragmentWithSection({
   fragmentIndex,
-  marker,
+  sectionMarker,
+  sourceChapterMarker,
   paragraph
 }: {
   fragmentIndex: number;
-  marker?: string;
+  sectionMarker?: string;
+  sourceChapterMarker?: string;
   paragraph: string;
 }): JSX.Element {
   const spacingClass = paragraphSpacingClass(paragraph);
   return (
     <div className="text-fragment" data-fragment-index={fragmentIndex}>
-      {marker ? <h3 className="inline-section-title">{marker}</h3> : null}
+      {sectionMarker ? <h3 className="inline-section-title">{sectionMarker}</h3> : null}
+      {sourceChapterMarker ? <p className="source-chapter-title">{sourceChapterMarker}</p> : null}
       <p className={spacingClass}>{paragraph}</p>
     </div>
   );

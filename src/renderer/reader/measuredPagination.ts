@@ -2,6 +2,10 @@ import type { ChartType, FigureFrequency, PaperColumn, PaperDocument, PaperFigur
 
 type ParagraphItem = {
   marker?: string;
+  sourceChapterMarker?: {
+    sourceChapterId: string;
+    title: string;
+  };
   text: string;
 };
 
@@ -416,6 +420,9 @@ function flattenTextFlow(pages: PaperPage[]): FlowItem[] {
     const markers = new Map(
       (page.sectionMarkers ?? []).map((marker) => [marker.paragraphIndex, marker.title])
     );
+    const sourceChapterMarkers = new Map(
+      (page.sourceChapterMarkers ?? []).map((marker) => [marker.paragraphIndex, marker])
+    );
     const sourceParagraphs = page.columns?.length
       ? page.columns.flatMap((column) => column.paragraphs)
       : (page.paragraphs ?? []);
@@ -426,6 +433,7 @@ function flattenTextFlow(pages: PaperPage[]): FlowItem[] {
         if (!trimmed) return null;
         return {
           marker: markers.get(index),
+          sourceChapterMarker: sourceChapterMarkers.get(index),
           text: trimmed,
           language: page.language,
           sectionTitle: page.sectionTitle,
@@ -682,6 +690,7 @@ function buildSafeTextPage(
 ): PaperPage {
   const first = items[0];
   const sectionMarkers = markersFromItems(items);
+  const sourceChapterMarkers = sourceChapterMarkersFromItems(items);
   return {
     ...sourcePage,
     id: `page-text-safe-${localIndex}`,
@@ -689,6 +698,7 @@ function buildSafeTextPage(
     role: "text",
     sectionTitle: first?.sectionTitle ?? sourcePage.sectionTitle,
     sectionMarkers,
+    sourceChapterMarkers,
     paragraphs: items.map((item) => item.text),
     columns,
     figure: figures[0],
@@ -704,16 +714,36 @@ function buildSafeTextPage(
 function columnFromItems(items: FlowItem[]): PaperColumn {
   return {
     paragraphs: items.map((item) => item.text),
-    sectionMarkers: markersFromItems(items)
+    sectionMarkers: markersFromItems(items),
+    sourceChapterMarkers: sourceChapterMarkersFromItems(items)
   };
 }
 
-function markersFromItems(items: FlowItem[]): PaperPage["sectionMarkers"] {
-  return items
-    .map((item, paragraphIndex) =>
-      item.marker ? { paragraphIndex, title: item.marker } : null
-    )
-    .filter((marker): marker is { paragraphIndex: number; title: string } => Boolean(marker));
+function markersFromItems(items: ParagraphItem[]): PaperPage["sectionMarkers"] {
+  return items.flatMap((item, paragraphIndex) =>
+    item.marker
+      ? [
+          {
+            paragraphIndex,
+            title: item.marker
+          }
+        ]
+      : []
+  );
+}
+
+function sourceChapterMarkersFromItems(items: ParagraphItem[]): PaperPage["sourceChapterMarkers"] {
+  return items.flatMap((item, paragraphIndex) =>
+    item.sourceChapterMarker
+      ? [
+          {
+            paragraphIndex,
+            sourceChapterId: item.sourceChapterMarker.sourceChapterId,
+            title: item.sourceChapterMarker.title
+          }
+        ]
+      : []
+  );
 }
 
 function takeItemsForBudget(
@@ -785,7 +815,7 @@ function estimateItemHeight(item: ParagraphItem, mode: "single" | "double"): num
   const charsPerLine = mode === "double" ? 42 : 76;
   const lineHeight = mode === "double" ? 17.8 : 20.5;
   const lines = Math.max(1, Math.ceil(weightedLength / charsPerLine));
-  const sectionHeight = item.marker ? 30 : 0;
+  const sectionHeight = item.marker || item.sourceChapterMarker ? 30 : 0;
   const paragraphGap = text.length > 90 ? 7 : 5;
   return Math.ceil(lines * lineHeight + paragraphGap + sectionHeight);
 }
@@ -799,7 +829,7 @@ function splitItemForHeight(
   if (text.length < SAFE_MIN_TEXT_SLICE * 2 || availableHeight < 48) return null;
 
   const fullHeight = estimateItemHeight(item, mode);
-  const reservedMarkerHeight = item.marker ? 34 : 0;
+  const reservedMarkerHeight = item.marker || item.sourceChapterMarker ? 34 : 0;
   const ratio = clamp((availableHeight - reservedMarkerHeight - 10) / Math.max(1, fullHeight - reservedMarkerHeight), 0.18, 0.82);
   const splitIndex = findParagraphSplitIndex(text, Math.round(text.length * ratio));
   if (splitIndex < SAFE_MIN_TEXT_SLICE || text.length - splitIndex < SAFE_MIN_TEXT_SLICE) return null;
@@ -816,6 +846,7 @@ function splitItemForHeight(
     tail: {
       ...item,
       marker: undefined,
+      sourceChapterMarker: undefined,
       text: tailText
     }
   };
@@ -835,6 +866,7 @@ function ensureNextTextDraft(
     id: `${source.id}-overflow-${Date.now()}`,
     paragraphs: [],
     sectionMarkers: [],
+    sourceChapterMarkers: [],
     figure: undefined,
     figures: undefined,
     figureLayout: undefined,
@@ -987,8 +1019,12 @@ function createTextPageDraft(page: PaperPage): TextPageDraft {
         const markers = new Map(
           (column.sectionMarkers ?? []).map((marker) => [marker.paragraphIndex, marker.title])
         );
+        const sourceChapterMarkers = new Map(
+          (column.sourceChapterMarkers ?? []).map((marker) => [marker.paragraphIndex, marker])
+        );
         return column.paragraphs.map((text, index) => ({
           marker: markers.get(index),
+          sourceChapterMarker: sourceChapterMarkers.get(index),
           text
         }));
       })
@@ -998,10 +1034,14 @@ function createTextPageDraft(page: PaperPage): TextPageDraft {
   const markers = new Map(
     (page.sectionMarkers ?? []).map((marker) => [marker.paragraphIndex, marker.title])
   );
+  const sourceChapterMarkers = new Map(
+    (page.sourceChapterMarkers ?? []).map((marker) => [marker.paragraphIndex, marker])
+  );
   return {
     page,
     items: (page.paragraphs ?? []).map((text, index) => ({
       marker: markers.get(index),
+      sourceChapterMarker: sourceChapterMarkers.get(index),
       text
     }))
   };
@@ -1069,11 +1109,8 @@ function rebuildPages(
             ...draft.page,
             paragraphs: draft.items.map((item) => item.text),
             columns: undefined,
-            sectionMarkers: draft.items
-              .map((item, paragraphIndex) =>
-                item.marker ? { paragraphIndex, title: item.marker } : null
-              )
-              .filter((marker): marker is { paragraphIndex: number; title: string } => Boolean(marker))
+            sectionMarkers: markersFromItems(draft.items),
+            sourceChapterMarkers: sourceChapterMarkersFromItems(draft.items)
           }
         : page;
 
@@ -1088,20 +1125,19 @@ function rebuildPages(
 function rebuildChapterAnchors(documentData: PaperDocument, pages: PaperPage[]): PaperDocument["chapterAnchors"] {
   if (documentData.chapterAnchors.length === 0) {
     const seen = new Set<string>();
-    return pages
-      .filter((page) => page.role === "text" && page.sourceChapterId)
-      .map((page) => {
-        const id = page.sourceChapterId ?? page.id;
+    return pages.flatMap((page) =>
+      sourceChapterMarkersFromPage(page).map((marker) => {
+        const id = marker.sourceChapterId ?? `${page.id}:${marker.title}`;
         if (seen.has(id)) return null;
         seen.add(id);
         return {
           id,
-          title: page.sectionTitle ?? page.title ?? id,
+          title: marker.title,
           pageIndex: page.index,
           pageId: page.id
         };
       })
-      .filter((anchor): anchor is { id: string; title: string; pageIndex: number; pageId: string } => Boolean(anchor));
+    ).filter((anchor): anchor is { id: string; title: string; pageIndex: number; pageId: string } => Boolean(anchor));
   }
 
   return documentData.chapterAnchors.map((anchor) => {
@@ -1112,4 +1148,11 @@ function rebuildChapterAnchors(documentData: PaperDocument, pages: PaperPage[]):
       pageIndex: page?.index ?? anchor.pageIndex
     };
   });
+}
+
+function sourceChapterMarkersFromPage(page: PaperPage): NonNullable<PaperPage["sourceChapterMarkers"]> {
+  return [
+    ...(page.sourceChapterMarkers ?? []),
+    ...(page.columns ?? []).flatMap((column) => column.sourceChapterMarkers ?? [])
+  ].filter((marker) => Boolean(marker.title));
 }

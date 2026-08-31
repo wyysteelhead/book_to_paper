@@ -92,6 +92,15 @@ export function bookToPaper(
           }
         ]
       : undefined,
+    sourceChapterMarkers: entry.isSectionStart
+      ? [
+          {
+            paragraphIndex: 0,
+            sourceChapterId: entry.chapterId,
+            title: entry.sourceChapterTitle
+          }
+        ]
+      : undefined,
     paragraphs: addCitations([entry.text], entry.chapterIndex),
     figures: flowIndex === 0 && figures.length > 0 ? figures : undefined,
     figure: flowIndex === 0 ? figures[0] : undefined,
@@ -184,8 +193,7 @@ function generateAbstract(book: ParsedBook, language: DocumentLanguage): string 
   return `This paper-style rendering reconstructs the imported text as a sequence of analytical sections. The transformation preserves the source reading order while introducing abstract, figures, section headers, and citation-like markers for focused inspection. ${trimmed}`;
 }
 
-function sectionTitle(title: string, index: number, language: DocumentLanguage, templates?: string[]): string {
-  const clean = title.replace(/^第\s*[一二三四五六七八九十百千万零〇\d]+\s*[章节回部卷篇]\s*/i, "").trim();
+function sectionTitle(_title: string, index: number, language: DocumentLanguage, templates?: string[]): string {
   return pseudoSectionTitle(index, index, language, templates);
 }
 
@@ -223,8 +231,8 @@ function createParagraphFlow(book: ParsedBook, language: DocumentLanguage, secti
       chapterId: firstChapter?.id ?? "chapter-1",
       chapterIndex: 0,
       sectionTitle: sectionTitle(firstChapter?.title ?? book.title, 0, language, sectionTitleTemplates),
-      sourceChapterTitle: firstChapter?.title ?? book.title,
-      isSectionStart: true
+      sourceChapterTitle: book.title,
+      isSectionStart: false
     }
   ];
 

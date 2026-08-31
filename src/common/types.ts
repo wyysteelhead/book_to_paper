@@ -185,6 +185,13 @@ export type PaperColumn = {
     paragraphIndex: number;
     title: string;
   }>;
+  sourceChapterMarkers?: SourceChapterMarker[];
+};
+
+export type SourceChapterMarker = {
+  paragraphIndex: number;
+  sourceChapterId: string;
+  title: string;
 };
 
 export type PaperColumnFigurePlacement = "left" | "right";
@@ -217,6 +224,7 @@ export type PaperPage = {
     paragraphIndex: number;
     title: string;
   }>;
+  sourceChapterMarkers?: SourceChapterMarker[];
   paragraphs?: string[];
   columns?: PaperColumn[];
   figure?: PaperFigure;
