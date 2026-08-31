@@ -190,10 +190,11 @@ function splitHtmlByTocEntries(
   chapterOffset: number
 ): ParsedChapter[] {
   const ranges = entries
-    .map((entry, index) => ({
-      entry,
-      index: findFragmentIndex(html, entry.fragment) ?? index
-    }))
+    .map((entry) => {
+      const index = findFragmentIndex(html, entry.fragment);
+      return index === null ? null : { entry, index };
+    })
+    .filter((range): range is { entry: TocEntry; index: number } => Boolean(range))
     .sort((a, b) => a.index - b.index);
   const chapters: ParsedChapter[] = [];
 
@@ -213,7 +214,7 @@ function splitHtmlByTocEntries(
   return [
     {
       id: `chapter-${chapterOffset + 1}`,
-      title: entries[0]?.title ?? path,
+      title: findChapterHeading(parseHtml(html)) ?? entries[0]?.title ?? path,
       paragraphs: extractParagraphs(parseHtml(html))
     }
   ].filter((chapter) => chapter.paragraphs.length > 0);
