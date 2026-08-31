@@ -26,8 +26,7 @@ const chartTypes: Array<{
   { type: "flow", label: "流程图" },
   { type: "multi_panel", label: "多面板图" },
   { type: "plain_table", label: "单纯表格" },
-  { type: "formula", label: "公式" },
-  { type: "custom", label: "自定义内容" }
+  { type: "formula", label: "公式" }
 ];
 
 export function ChartTemplatePreview(): JSX.Element {
@@ -549,37 +548,6 @@ function templatePromptFor(): string {
 }
 
 function previewFigure(type: PaperFigure["chartType"], seed: number): PaperFigure {
-  if (type === "custom") {
-    return {
-      id: `preview-${type}-${seed}`,
-      number: seed,
-      layout: "double_column_small",
-      title: "Preview",
-      caption: "图 0. 自定义内容模板预览。",
-      chartType: "custom",
-      data: { kind: "custom", props: { type: "english_mcq" } },
-      customRenderer: {
-        language: "html",
-        code: `<style>
-.mcq-preview{width:100%;height:100%;padding:14px 16px;overflow:hidden;border:1px solid #c9c1b4;background:#fffefa;font-family:Inter,"Times New Roman",serif;color:#1f1f1d}
-.mcq-preview h4{margin:0 0 8px;font-size:12px}
-.mcq-preview p{margin:0 0 9px;font-size:11px;line-height:1.35}
-.mcq-preview ol{margin:0;padding-left:20px;display:grid;gap:5px;font-size:10px}
-</style>
-<div class="mcq-preview">
-  <h4>Semantic Discrimination Item</h4>
-  <p>Which option best preserves the causal relation implied by the source sentence?</p>
-  <ol type="A">
-    <li>The event follows from an external constraint.</li>
-    <li>The speaker denies the observed transition.</li>
-    <li>The sequence is unrelated to prior evidence.</li>
-    <li>The conclusion reverses the temporal order.</li>
-  </ol>
-</div>`
-      },
-      workScoreBonus: 0
-    };
-  }
   return {
     id: `preview-${type}-${seed}`,
     number: seed,
